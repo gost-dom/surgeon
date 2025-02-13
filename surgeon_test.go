@@ -17,6 +17,7 @@ import (
 	"testing"
 
 	"github.com/gost-dom/surgeon"
+	"github.com/stretchr/testify/assert"
 )
 
 type SimpleDependency struct{}
@@ -51,4 +52,41 @@ func TestSurgeon(t *testing.T) {
 	if !reflect.DeepEqual(actual, expected) {
 		t.Fatal("Clone was not identical to original instance")
 	}
+}
+
+// Just a silly interface to test interface implementation
+type Aer interface{ A() string }
+
+// A silly type implementing interface Aer
+type A struct{}
+
+func (A) A() string { return "Real A" }
+
+type FakeA struct{}
+
+func (FakeA) A() string { return "Fake A" }
+
+type RootWithSingleInterfaceDependencyAndSubtree struct {
+	Aer        Aer
+	SimpleRoot *SimpleRoot
+}
+
+func TestReplaceSingleDependency(t *testing.T) {
+	tmp := NewSimpleRoot()
+	simpleRoot := &tmp
+	tree := RootWithSingleInterfaceDependencyAndSubtree{
+		Aer:        A{},
+		SimpleRoot: simpleRoot,
+	}
+
+	subTreeCopy := cloneObject(t, tree.SimpleRoot)
+
+	analysis := surgeon.Analyse(tree)
+	actual := surgeon.Replace[Aer](analysis, FakeA{}).Create()
+
+	assert.Equal(t, "Fake A", actual.Aer.A())
+	if !reflect.DeepEqual(actual.SimpleRoot, subTreeCopy) {
+		t.Fatal("Object tree was not equal")
+	}
+	assert.Same(t, simpleRoot, actual.SimpleRoot, "It's pointing somewhere else")
 }
