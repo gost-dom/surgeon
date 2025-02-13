@@ -21,18 +21,27 @@ func (a *GraphAnalysis[T]) Create() T {
 
 func Replace[T any, V any](a *GraphAnalysis[V], instance T) *GraphAnalysis[V] {
 	instanceType := reflect.TypeFor[V]()
+	isPointer := instanceType.Kind() == reflect.Pointer
+	if isPointer {
+		instanceType = instanceType.Elem()
+	}
 	depType := reflect.TypeFor[T]()
 	instanceVal := reflect.ValueOf(a.instance)
+	if isPointer {
+		instanceVal = reflect.Indirect(instanceVal)
+	}
 
 	instanceCopyPtr := reflect.New(instanceType)
 	instanceCopy := reflect.Indirect(instanceCopyPtr)
+	instanceCopy.Set(instanceVal)
 
 	for _, field := range reflect.VisibleFields(instanceType) {
 		if field.Type == depType {
 			instanceCopy.FieldByIndex(field.Index).Set(reflect.ValueOf(instance))
-		} else {
-			instanceCopy.FieldByIndex(field.Index).Set(instanceVal.FieldByIndex(field.Index))
 		}
+	}
+	if isPointer {
+		instanceCopy = instanceCopy.Addr()
 	}
 	newInstance := instanceCopy.Interface().(V)
 	return &GraphAnalysis[V]{instance: newInstance}
