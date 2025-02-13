@@ -1,0 +1,3 @@
+.PHONY: test-watch
+test-watch:
+	gow -c test ./...
