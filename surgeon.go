@@ -220,12 +220,20 @@ func (a *Graph[T]) replace(
 		}
 		depsRemoved = append(depsRemoved, depsRemovedInIteration...)
 	}
+
+	var result reflect.Value
 	if isPointer {
-		return objCopyPtr, depsRemoved
+		result = objCopyPtr
 	} else {
-		return objCopy, depsRemoved
+		result = objCopy
 	}
+	if i, ok := result.Interface().(Initer); ok {
+		i.Init()
+	}
+	return result, depsRemoved
 }
+
+type Initer interface{ Init() }
 
 func (a *Graph[T]) getDependencyTypes(t reflect.Type) types {
 	var res types
