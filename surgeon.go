@@ -78,12 +78,14 @@ func (a *Graph[T]) inScope(t reflect.Type) bool {
 	return false
 }
 
+func isPointer(t reflect.Type) bool { return t.Kind() == reflect.Pointer }
+
 func (a *Graph[T]) buildTypeDependencies(
 	v reflect.Value,
 	visitedTypes []reflect.Type,
 ) types {
 	type_ := v.Type()
-	if !a.inScope(type_) {
+	if !a.inScope(type_) && !isPointer(type_) {
 		return nil
 	}
 	if slices.Contains(visitedTypes, type_) {
