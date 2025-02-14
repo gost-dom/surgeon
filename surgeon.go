@@ -245,6 +245,13 @@ func (a *Graph[T]) getDependencyTypes(t reflect.Type) types {
 	return res
 }
 
+func printType(t reflect.Type) string {
+	if isPointer(t) {
+		return "*" + printType(t.Elem())
+	}
+	return fmt.Sprintf("%s (%s)", t.Name(), t.PkgPath())
+}
+
 func Debug[T any](a *Graph[T]) string {
 	var b strings.Builder
 	b.WriteString("Registered types:\n")
@@ -253,7 +260,7 @@ func Debug[T any](a *Graph[T]) string {
 		b.WriteString(fmt.Sprintf(" - %s\n", k.Name()))
 		b.WriteString("    By dependency\n")
 		for k2, f := range v {
-			b.WriteString(fmt.Sprintf("     - %s (count: %d)\n", k2.Name(), len(f)))
+			b.WriteString(fmt.Sprintf("     - %s (count: %d)\n", printType(k2), len(f)))
 			for _, d := range f {
 				n := d.Name
 				fieldToDeps[n] = append(fieldToDeps[n], k2)
@@ -263,7 +270,7 @@ func Debug[T any](a *Graph[T]) string {
 		for n, deps := range fieldToDeps {
 			b.WriteString(fmt.Sprintf("    - %s\n", n))
 			for _, d := range deps {
-				b.WriteString(fmt.Sprintf("      - %s\n", d.Name()))
+				b.WriteString(fmt.Sprintf("      - %s\n", printType(d)))
 			}
 		}
 	}
