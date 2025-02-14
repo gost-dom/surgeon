@@ -193,6 +193,29 @@ func TestReplaceDependencyInMultipleBranches(t *testing.T) {
 	graph := surgeon.Analyse(original)
 
 	// Replace A
-	withAerReplaced := surgeon.Replace[Aer](graph, &FakeA{}).Create()
+	graphWithFakeA := surgeon.Replace[Aer](graph, &FakeA{})
+	withAerReplaced := graphWithFakeA.Create()
 	assert.Equal(t, "Fake A", withAerReplaced.Aer.A())
+	assert.Equal(t, "B says: Fake A", withAerReplaced.Ber.B())
+
+	// Replace B after A
+	withBerReplaced := surgeon.Replace[Ber](graphWithFakeA, &FakeB{}).Create()
+	assert.Equal(t, "Fake A", withBerReplaced.Aer.A())
+	assert.Equal(t, "Fake B", withBerReplaced.Ber.B())
+}
+
+func TestReplaceDependencyInMultipleBranchesTopFirst(t *testing.T) {
+	original := RootWithMultipleDepsToAer{A{}, B{A{}}}
+	graph := surgeon.Analyse(original)
+
+	// Replace B
+	graphWithFakeB := surgeon.Replace[Ber](graph, &FakeB{})
+	withBerReplaced := graphWithFakeB.Create()
+	assert.Equal(t, "Real A", withBerReplaced.Aer.A())
+	assert.Equal(t, "Fake B", withBerReplaced.Ber.B())
+
+	// Replace A after B
+	withAerReplaced := surgeon.Replace[Aer](graphWithFakeB, &FakeA{}).Create()
+	assert.Equal(t, "Fake A", withAerReplaced.Aer.A())
+	assert.Equal(t, "Fake B", withAerReplaced.Ber.B())
 }
