@@ -182,3 +182,17 @@ func TestReplaceFirstLayersOfAbstractions(t *testing.T) {
 		"surgeon: Cannot replace type Aer. No dependency in the graph",
 		func() { surgeon.Replace[Aer](graph, A{}) })
 }
+
+type RootWithMultipleDepsToAer struct {
+	Aer Aer
+	Ber Ber
+}
+
+func TestReplaceDependencyInMultipleBranches(t *testing.T) {
+	original := RootWithMultipleDepsToAer{A{}, B{A{}}}
+	graph := surgeon.Analyse(original)
+
+	// Replace A
+	withAerReplaced := surgeon.Replace[Aer](graph, &FakeA{}).Create()
+	assert.Equal(t, "Fake A", withAerReplaced.Aer.A())
+}

@@ -16,7 +16,6 @@ func Analyse[T any](instance T) *GraphAnalysis[T] {
 }
 
 type graphDependee struct {
-	// type_ reflect.Type
 	field reflect.StructField
 	value reflect.Value
 }
@@ -27,10 +26,16 @@ type types []reflect.Type
 
 func (t *types) append(types ...reflect.Type) {
 	for _, type_ := range types {
-		// if !slices.Contains(*t, type_) {
 		*t = append(*t, type_)
-		// }
 	}
+}
+
+func (t types) String() string {
+	names := make([]string, len(t))
+	for i, typ := range t {
+		names[i] = typ.Name()
+	}
+	return strings.Join(names, ", ")
 }
 
 // The GraphAnalysis is the result of analysing a real object graph.
@@ -94,9 +99,10 @@ func (a *GraphAnalysis[T]) buildTypeDependencies(
 			})
 		}
 		a.dependencies[type_] = typeDependencies
+		dependencies.append(type_)
 		return dependencies
 	}
-	return []reflect.Type{type_} // Or nil?
+	return types{type_} // Or nil?
 }
 
 func (a *GraphAnalysis[T]) addDependee(t reflect.Type, d graphDependee) {
@@ -125,9 +131,10 @@ func (a *GraphAnalysis[T]) replace(
 	objType := graphObj.Type()
 
 	isPointer := objType.Kind() == reflect.Pointer
-	if isPointer {
-		objType = objType.Elem()
+	isInterface := objType.Kind() == reflect.Interface
+	if isPointer || isInterface {
 		graphObj = graphObj.Elem()
+		objType = graphObj.Type()
 	}
 
 	deps := a.dependencies[objType]
@@ -141,7 +148,8 @@ func (a *GraphAnalysis[T]) replace(
 			panic(msg)
 		} else {
 			msg := fmt.Sprintf(
-				"surgeon: Dependency tree is in an inconsistent state. Please submit an issue at %s",
+				"surgeon: Dependency tree is in an inconsistent state %s has no dependency to %s. Please submit an issue at %s",
+				objType.Name(), type_.Name(),
 				newIssueUrl,
 			)
 			panic(msg)
@@ -198,6 +206,31 @@ func (a *GraphAnalysis[T]) getDependencyTypes(t reflect.Type) types {
 		}
 	}
 	return res
+}
+
+func Debug[T any](a *GraphAnalysis[T]) string {
+	var b strings.Builder
+	b.WriteString("Registered types:\n")
+	for k, v := range a.dependencies {
+		fieldToDeps := make(map[string][]reflect.Type)
+		b.WriteString(fmt.Sprintf(" - %s\n", k.Name()))
+		b.WriteString("    By dependency\n")
+		for k2, f := range v {
+			b.WriteString(fmt.Sprintf("     - %s (count: %d)\n", k2.Name(), len(f)))
+			for _, d := range f {
+				n := d.Name
+				fieldToDeps[n] = append(fieldToDeps[n], k2)
+			}
+		}
+		b.WriteString("    By field\n")
+		for n, deps := range fieldToDeps {
+			b.WriteString(fmt.Sprintf("    - %s\n", n))
+			for _, d := range deps {
+				b.WriteString(fmt.Sprintf("      - %s\n", d.Name()))
+			}
+		}
+	}
+	return b.String()
 }
 
 // Create a new graph with a dependency replaced by a new implementation. Panics
