@@ -139,7 +139,7 @@ func (a *Graph[T]) buildTypeDependencies(
 		dependencies.append(type_)
 		return dependencies
 	}
-	return types{type_} // Or nil?
+	return nil
 }
 
 func (a *Graph[T]) Instance() T {
