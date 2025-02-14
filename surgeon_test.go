@@ -46,8 +46,8 @@ func cloneObject[T any](t *testing.T, instance T) (result T) {
 func TestSurgeon(t *testing.T) {
 	expected := NewSimpleRoot()
 
-	analysis := surgeon.Analyse(cloneObject(t, expected))
-	actual := analysis.Create()
+	analysis := surgeon.BuildGraph(cloneObject(t, expected))
+	actual := analysis.Instance()
 
 	if !reflect.DeepEqual(actual, expected) {
 		t.Fatal("Clone was not identical to original instance")
@@ -81,8 +81,8 @@ func TestReplaceSingleDependencyOnPointer(t *testing.T) {
 
 	subTreeCopy := cloneObject(t, tree.SimpleRoot)
 
-	analysis := surgeon.Analyse(tree)
-	actual := surgeon.Replace[Aer](analysis, FakeA{}).Create()
+	analysis := surgeon.BuildGraph(tree)
+	actual := surgeon.Replace[Aer](analysis, FakeA{}).Instance()
 
 	assert.Equal(t, "Fake A", actual.Aer.A())
 	if !reflect.DeepEqual(actual.SimpleRoot, subTreeCopy) {
@@ -101,8 +101,8 @@ func TestReplaceSingleDependencyOnNonPointer(t *testing.T) {
 
 	subTreeCopy := cloneObject(t, tree.SimpleRoot)
 
-	analysis := surgeon.Analyse(tree)
-	actual := surgeon.Replace[Aer](analysis, FakeA{}).Create()
+	analysis := surgeon.BuildGraph(tree)
+	actual := surgeon.Replace[Aer](analysis, FakeA{}).Instance()
 
 	assert.Equal(t, "Fake A", actual.Aer.A())
 	if !reflect.DeepEqual(actual.SimpleRoot, subTreeCopy) {
@@ -123,7 +123,7 @@ func TestPanicWhenDependencyDoesntExist(t *testing.T) {
 		t,
 		"surgeon: Cannot replace type Aer. No dependency in the graph",
 		func() {
-			a := surgeon.Analyse(tree)
+			a := surgeon.BuildGraph(tree)
 			surgeon.Replace[Aer](a, FakeA{})
 		},
 	)
@@ -141,7 +141,7 @@ func TestReplaceingBetweenLayersOfInterfaces(t *testing.T) {
 		t,
 		"surgeon: Cannot replace type Aer. No dependency in the graph",
 		func() {
-			a := surgeon.Analyse(tree)
+			a := surgeon.BuildGraph(tree)
 			surgeon.Replace[Aer](a, FakeA{})
 		},
 	)
@@ -165,16 +165,16 @@ func (FakeB) B() string { return "Fake B" }
 
 func TesReplaceInsidetLayersOfAbstractions(t *testing.T) {
 	actual := TypeWithLayersOfAbstraction{Ber: B{Aer: A{}}}
-	graph := surgeon.Analyse(actual)
-	instance := surgeon.Replace[Aer](graph, FakeA{}).Create()
+	graph := surgeon.BuildGraph(actual)
+	instance := surgeon.Replace[Aer](graph, FakeA{}).Instance()
 	assert.Equal(t, "B says: FakeA", instance.Ber.B())
 }
 
 func TestReplaceFirstLayersOfAbstractions(t *testing.T) {
 	actual := TypeWithLayersOfAbstraction{Ber: B{Aer: A{}}}
-	graph := surgeon.Analyse(actual)
+	graph := surgeon.BuildGraph(actual)
 	graph = surgeon.Replace[Ber](graph, FakeB{})
-	instance := graph.Create()
+	instance := graph.Instance()
 	assert.Equal(t, "Fake B", instance.Ber.B())
 
 	// There should no longer be an Aer in the graph
@@ -190,32 +190,32 @@ type RootWithMultipleDepsToAer struct {
 
 func TestReplaceDependencyInMultipleBranches(t *testing.T) {
 	original := RootWithMultipleDepsToAer{A{}, B{A{}}}
-	graph := surgeon.Analyse(original)
+	graph := surgeon.BuildGraph(original)
 
 	// Replace A
 	graphWithFakeA := surgeon.Replace[Aer](graph, &FakeA{})
-	withAerReplaced := graphWithFakeA.Create()
+	withAerReplaced := graphWithFakeA.Instance()
 	assert.Equal(t, "Fake A", withAerReplaced.Aer.A())
 	assert.Equal(t, "B says: Fake A", withAerReplaced.Ber.B())
 
 	// Replace B after A
-	withBerReplaced := surgeon.Replace[Ber](graphWithFakeA, &FakeB{}).Create()
+	withBerReplaced := surgeon.Replace[Ber](graphWithFakeA, &FakeB{}).Instance()
 	assert.Equal(t, "Fake A", withBerReplaced.Aer.A())
 	assert.Equal(t, "Fake B", withBerReplaced.Ber.B())
 }
 
 func TestReplaceDependencyInMultipleBranchesTopFirst(t *testing.T) {
 	original := RootWithMultipleDepsToAer{A{}, B{A{}}}
-	graph := surgeon.Analyse(original)
+	graph := surgeon.BuildGraph(original)
 
 	// Replace B
 	graphWithFakeB := surgeon.Replace[Ber](graph, &FakeB{})
-	withBerReplaced := graphWithFakeB.Create()
+	withBerReplaced := graphWithFakeB.Instance()
 	assert.Equal(t, "Real A", withBerReplaced.Aer.A())
 	assert.Equal(t, "Fake B", withBerReplaced.Ber.B())
 
 	// Replace A after B
-	withAerReplaced := surgeon.Replace[Aer](graphWithFakeB, &FakeA{}).Create()
+	withAerReplaced := surgeon.Replace[Aer](graphWithFakeB, &FakeA{}).Instance()
 	assert.Equal(t, "Fake A", withAerReplaced.Aer.A())
 	assert.Equal(t, "Fake B", withAerReplaced.Ber.B())
 }

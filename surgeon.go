@@ -7,20 +7,13 @@ import (
 	"strings"
 )
 
-// Analyses a configured object. The resulting [GraphAnalysis] can be used to
+// Analyses a configured object. The resulting [Graph] can be used to
 // replace dependencies.
-func Analyse[T any](instance T) *GraphAnalysis[T] {
-	result := &GraphAnalysis[T]{instance: instance}
+func BuildGraph[T any](instance T) *Graph[T] {
+	result := &Graph[T]{instance: instance}
 	result.buildDependencies()
 	return result
 }
-
-type graphDependee struct {
-	field reflect.StructField
-	value reflect.Value
-}
-
-type graphDependency struct{}
 
 type types []reflect.Type
 
@@ -38,10 +31,9 @@ func (t types) String() string {
 	return strings.Join(names, ", ")
 }
 
-// The GraphAnalysis is the result of analysing a real object graph.
-type GraphAnalysis[T any] struct {
-	instance  T
-	dependees map[reflect.Type][]graphDependee
+// The Graph is the result of analysing a real object graph.
+type Graph[T any] struct {
+	instance T
 	// First key is a type that _has_ dependencies, the "dependee".
 	// The inner map is a map of all direct and indirect dependencies to the
 	// fields on the dependee that has this as a dependecy.
@@ -53,13 +45,12 @@ type GraphAnalysis[T any] struct {
 	interfaces   []reflect.Type
 }
 
-func (a *GraphAnalysis[T]) buildDependencies() {
-	a.dependees = make(map[reflect.Type][]graphDependee)
+func (a *Graph[T]) buildDependencies() {
 	a.dependencies = make(map[reflect.Type]map[reflect.Type][]reflect.StructField)
 	a.buildTypeDependencies(reflect.ValueOf(a.instance), nil)
 }
 
-func (a *GraphAnalysis[T]) buildTypeDependencies(
+func (a *Graph[T]) buildTypeDependencies(
 	v reflect.Value,
 	visitedTypes []reflect.Type,
 ) types {
@@ -92,11 +83,6 @@ func (a *GraphAnalysis[T]) buildTypeDependencies(
 			for _, depType := range fieldDependencies {
 				typeDependencies[depType] = append(typeDependencies[depType], f)
 			}
-
-			a.addDependee(type_, graphDependee{
-				field: f,
-				value: v,
-			})
 		}
 		a.dependencies[type_] = typeDependencies
 		dependencies.append(type_)
@@ -105,15 +91,7 @@ func (a *GraphAnalysis[T]) buildTypeDependencies(
 	return types{type_} // Or nil?
 }
 
-func (a *GraphAnalysis[T]) addDependee(t reflect.Type, d graphDependee) {
-	a.dependees[t] = append(a.dependees[t], d)
-}
-
-func (a *GraphAnalysis[T]) addDependency(t reflect.Type, d graphDependee) {
-	a.dependees[t] = append(a.dependees[t], d)
-}
-
-func (a *GraphAnalysis[T]) Create() T {
+func (a *Graph[T]) Instance() T {
 	return a.instance
 }
 
@@ -123,7 +101,7 @@ func (a *GraphAnalysis[T]) Create() T {
 // Panics if the dependency doesn't exist in the graph. If this scenario is
 // detected on anything but the root, this is a bug in surgeon. isRoot is used
 // only to create a helpful error message, "It's not you, it's us!".
-func (a *GraphAnalysis[T]) replace(
+func (a *Graph[T]) replace(
 	graphObj, newValue reflect.Value,
 	type_ reflect.Type,
 	isRoot bool,
@@ -198,7 +176,7 @@ func (a *GraphAnalysis[T]) replace(
 	}
 }
 
-func (a *GraphAnalysis[T]) getDependencyTypes(t reflect.Type) types {
+func (a *Graph[T]) getDependencyTypes(t reflect.Type) types {
 	var res types
 	for k, v := range a.dependencies[t] {
 		for range v {
@@ -208,7 +186,7 @@ func (a *GraphAnalysis[T]) getDependencyTypes(t reflect.Type) types {
 	return res
 }
 
-func Debug[T any](a *GraphAnalysis[T]) string {
+func Debug[T any](a *Graph[T]) string {
 	var b strings.Builder
 	b.WriteString("Registered types:\n")
 	for k, v := range a.dependencies {
@@ -236,10 +214,9 @@ func Debug[T any](a *GraphAnalysis[T]) string {
 // Create a new graph with a dependency replaced by a new implementation. Panics
 // if the root object in the graph doesn't include the replaced type in the
 // dependency tree. Panics if the replaced type isn't an interface.
-func Replace[V any, T any](a *GraphAnalysis[T], instance V) *GraphAnalysis[T] {
-	clone := &GraphAnalysis[T]{
+func Replace[V any, T any](a *Graph[T], instance V) *Graph[T] {
+	clone := &Graph[T]{
 		a.instance,
-		a.dependees,
 		a.dependencies,
 		a.interfaces,
 	}
