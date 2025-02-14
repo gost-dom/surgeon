@@ -7,10 +7,18 @@ import (
 	"strings"
 )
 
+type Scope interface{ InScope(reflect.Type) bool }
+
+type PackagePrefixScope string
+
+func (s PackagePrefixScope) InScope(t reflect.Type) bool {
+	return strings.HasPrefix(string(s), t.PkgPath())
+}
+
 // Analyses a configured object. The resulting [Graph] can be used to
 // replace dependencies.
-func BuildGraph[T any](instance T) *Graph[T] {
-	result := &Graph[T]{instance: instance}
+func BuildGraph[T any](instance T, scopes ...Scope) *Graph[T] {
+	result := &Graph[T]{instance: instance, scopes: scopes}
 	result.buildDependencies()
 	return result
 }
@@ -44,6 +52,7 @@ type Graph[T any] struct {
 	dependencies map[reflect.Type]map[reflect.Type][]reflect.StructField
 	interfaces   []reflect.Type
 	ignoreNil    bool
+	scopes       []Scope
 }
 
 func (a *Graph[T]) buildDependencies() {
@@ -57,11 +66,26 @@ func (g *Graph[T]) IgnoreNil() *Graph[T] {
 	return clone
 }
 
+func (a *Graph[T]) inScope(t reflect.Type) bool {
+	if len(a.scopes) == 0 {
+		return true
+	}
+	for _, s := range a.scopes {
+		if s.InScope(t) {
+			return true
+		}
+	}
+	return false
+}
+
 func (a *Graph[T]) buildTypeDependencies(
 	v reflect.Value,
 	visitedTypes []reflect.Type,
 ) types {
 	type_ := v.Type()
+	if !a.inScope(type_) {
+		return nil
+	}
 	if slices.Contains(visitedTypes, type_) {
 		names := make([]string, len(visitedTypes)+1)
 		for i, t := range visitedTypes {
@@ -74,13 +98,23 @@ func (a *Graph[T]) buildTypeDependencies(
 
 	switch type_.Kind() {
 	case reflect.Interface:
+		if v.IsZero() && !a.ignoreNil {
+			panic(fmt.Sprintf("surgeon: Value for %s (%s) is nil", type_.Name(), type_.PkgPath()))
+		}
 		if !slices.Contains(a.interfaces, type_) {
 			a.interfaces = append(a.interfaces, type_)
 		}
 		fallthrough
 	case reflect.Pointer:
 		if v.IsZero() && !a.ignoreNil {
-			panic(fmt.Sprintf("surgeon: Value for %s is nil", type_.Name()))
+			innerType := type_.Elem()
+			panic(
+				fmt.Sprintf(
+					"surgeon: Value for *%s (%s) is nil",
+					innerType.Name(),
+					innerType.PkgPath(),
+				),
+			)
 		}
 		tmp := a.buildTypeDependencies(v.Elem(), visitedTypes)
 		tmp.append(type_)
@@ -89,6 +123,9 @@ func (a *Graph[T]) buildTypeDependencies(
 		var dependencies types
 		typeDependencies := make(map[reflect.Type][]reflect.StructField)
 		for _, f := range reflect.VisibleFields(type_) {
+			if !f.IsExported() {
+				continue
+			}
 			fieldValue := v.FieldByIndex(f.Index)
 			fieldDependencies := a.buildTypeDependencies(fieldValue, visitedTypes)
 			dependencies.append(fieldDependencies...)
@@ -229,6 +266,7 @@ func (g *Graph[T]) clone() *Graph[T] {
 		g.dependencies,
 		g.interfaces,
 		g.ignoreNil,
+		g.scopes,
 	}
 }
 

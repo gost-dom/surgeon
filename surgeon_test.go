@@ -13,6 +13,7 @@ package surgeon_test
 import (
 	"bytes"
 	"encoding/gob"
+	"net/http"
 	"reflect"
 	"testing"
 
@@ -250,4 +251,16 @@ func TestInjectingAllInterfacesFromType(t *testing.T) {
 	assert.Equal(t, "FakeAandB.A", actual.Aer.A())
 	assert.Equal(t, "FakeAandB.B", actual.Ber.B())
 	assert.Equal(t, "Real C", actual.Cer.C())
+}
+
+func TestLimitGraphToKnownTypes(t *testing.T) {
+	root := &struct{ Routes http.ServeMux }{}
+	// The following panics without the scope, as it will try to iterate through
+	// private members
+	surgeon.BuildGraph(root)
+}
+
+func TestLimitGraphToExportedNames(t *testing.T) {
+	root := &struct{ routes http.ServeMux }{}
+	surgeon.BuildGraph(root)
 }
