@@ -110,3 +110,21 @@ func TestReplaceSingleDependencyOnNonPointer(t *testing.T) {
 	}
 	assert.Same(t, simpleRoot, actual.SimpleRoot, "It's pointing somewhere else")
 }
+
+func TestPanicWhenDependencyDoesntExist(t *testing.T) {
+	// If you try to replace a dependency that doesn't exist in the graph,
+	// you have certain assumptions about the graph that aren't true, most
+	// likely resulting in a false test outcome.
+	// Surgeon will panic in this case, helping you identify the issue by
+	// failing early.
+
+	tree := NewSimpleRoot()
+	assert.PanicsWithValue(
+		t,
+		"surgeon: Cannot replace type Aer. No dependency in the graph",
+		func() {
+			a := surgeon.Analyse(tree)
+			surgeon.Replace[Aer](a, FakeA{})
+		},
+	)
+}

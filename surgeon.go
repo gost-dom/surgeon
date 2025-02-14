@@ -1,6 +1,7 @@
 package surgeon
 
 import (
+	"fmt"
 	"reflect"
 	"slices"
 	"strings"
@@ -26,9 +27,9 @@ type types []reflect.Type
 
 func (t *types) append(types ...reflect.Type) {
 	for _, type_ := range types {
-		if !slices.Contains(*t, type_) {
-			*t = append(*t, type_)
-		}
+		// if !slices.Contains(*t, type_) {
+		*t = append(*t, type_)
+		// }
 	}
 }
 
@@ -112,11 +113,16 @@ func (a *GraphAnalysis[T]) Create() T {
 }
 
 // replace rebuilds the parts of the graph in graphObj by replacing dependencies
-// of type t with the value newValue
+// of type t with the value newValue.
+//
+// Panics if the dependency doesn't exist in the graph. If this scenario is
+// detected on anything but the root, this is a bug in surgeon. isRoot is used
+// only to create a helpful error message, "It's not you, it's us!".
 func (a *GraphAnalysis[T]) replace(
 	graphObj, newValue reflect.Value,
 	type_ reflect.Type,
-) reflect.Value {
+	isRoot bool,
+) (reflect.Value, types) {
 	objType := graphObj.Type()
 
 	isPointer := objType.Kind() == reflect.Pointer
@@ -128,39 +134,85 @@ func (a *GraphAnalysis[T]) replace(
 	deps := a.dependencies[objType]
 	fieldsToUpdate := deps[type_]
 	if len(fieldsToUpdate) == 0 {
-		return graphObj
+		if isRoot {
+			msg := fmt.Sprintf(
+				"surgeon: Cannot replace type %s. No dependency in the graph",
+				type_.Name(),
+			)
+			panic(msg)
+		} else {
+			msg := fmt.Sprintf(
+				"surgeon: Dependency tree is in an inconsistent state. Please submit an issue at %s",
+				newIssueUrl,
+			)
+			panic(msg)
+		}
 	}
 
 	objCopyPtr := reflect.New(objType)
 	objCopy := reflect.Indirect(objCopyPtr)
 	objCopy.Set(graphObj)
 
+	var depsRemoved types
+	var handledFields []string
 	for _, f := range fieldsToUpdate {
+		if slices.Contains(handledFields, f.Name) {
+			continue
+		}
+		handledFields = append(handledFields, f.Name)
 		fieldValue := objCopy.FieldByIndex(f.Index)
 		if f.Type == type_ {
 			fieldValue.Set(newValue)
+			depsRemoved = append(depsRemoved, a.getDependencyTypes(type_)...)
 		} else {
-			a.replace(fieldValue, newValue, type_)
+			newVal, depsRemovedHere := a.replace(fieldValue, newValue, type_, false)
+			fieldValue.Set(newVal)
+			for _, d := range depsRemovedHere {
+				depFields := deps[d]
+				idx := slices.IndexFunc(depFields, func(x reflect.StructField) bool { return x.Name == f.Name })
+				if idx == -1 {
+					panic("Bad field")
+				}
+				deps[d] = slices.Delete(depFields, idx, idx+1)
+			}
+			depsRemoved = append(depsRemoved, depsRemovedHere...)
 		}
 	}
 	if isPointer {
-		return objCopyPtr
+		return objCopyPtr, depsRemoved
 	} else {
-		return objCopy
+		return objCopy, depsRemoved
 	}
 }
 
-func Replace[T any, V any](a *GraphAnalysis[V], instance T) *GraphAnalysis[V] {
-	clone := &GraphAnalysis[V]{
+func (a *GraphAnalysis[T]) getDependencyTypes(t reflect.Type) types {
+	var res types
+	for k, v := range a.dependencies[t] {
+		for range v {
+			res = append(res, k)
+		}
+	}
+	return res
+}
+
+// Create a new graph with a dependency replaced by a new implementation. Panics
+// if the root object in the graph doesn't include the replaced type in the
+// dependency tree. Panics if the replaced type isn't an interface.
+func Replace[V any, T any](a *GraphAnalysis[T], instance V) *GraphAnalysis[T] {
+	clone := &GraphAnalysis[T]{
 		a.instance,
 		a.dependees,
 		a.dependencies,
 		a.interfaces,
 	}
 
-	replacedInstance := a.replace(
-		reflect.ValueOf(a.instance), reflect.ValueOf(instance), reflect.TypeFor[T]()).
-		Interface().(V)
-	clone.instance = replacedInstance
+	t := reflect.TypeFor[V]()
+	if t.Kind() != reflect.Interface {
+		panic("surgeon: Replaced type must be an interface")
+	}
+
+	replacedInstance, _ := a.replace(
+		reflect.ValueOf(a.instance), reflect.ValueOf(instance), t, true)
+	clone.instance = replacedInstance.Interface().(T)
 	return clone
 }
