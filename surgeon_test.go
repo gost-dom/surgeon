@@ -128,3 +128,57 @@ func TestPanicWhenDependencyDoesntExist(t *testing.T) {
 		},
 	)
 }
+
+func TestReplaceingBetweenLayersOfInterfaces(t *testing.T) {
+	// If you try to replace a dependency that doesn't exist in the graph,
+	// you have certain assumptions about the graph that aren't true, most
+	// likely resulting in a false test outcome.
+	// Surgeon will panic in this case, helping you identify the issue by
+	// failing early.
+
+	tree := NewSimpleRoot()
+	assert.PanicsWithValue(
+		t,
+		"surgeon: Cannot replace type Aer. No dependency in the graph",
+		func() {
+			a := surgeon.Analyse(tree)
+			surgeon.Replace[Aer](a, FakeA{})
+		},
+	)
+}
+
+// Just a silly interface to test interface implementation
+type Ber interface{ B() string }
+
+// A silly type implementing interface Aer
+type B struct{ Aer Aer }
+
+func (b B) B() string { return "B says: " + b.Aer.A() }
+
+type TypeWithLayersOfAbstraction struct {
+	Ber Ber
+}
+
+type FakeB struct{}
+
+func (FakeB) B() string { return "Fake B" }
+
+func TesReplaceInsidetLayersOfAbstractions(t *testing.T) {
+	actual := TypeWithLayersOfAbstraction{Ber: B{Aer: A{}}}
+	graph := surgeon.Analyse(actual)
+	instance := surgeon.Replace[Aer](graph, FakeA{}).Create()
+	assert.Equal(t, "B says: FakeA", instance.Ber.B())
+}
+
+func TestReplaceFirstLayersOfAbstractions(t *testing.T) {
+	actual := TypeWithLayersOfAbstraction{Ber: B{Aer: A{}}}
+	graph := surgeon.Analyse(actual)
+	graph = surgeon.Replace[Ber](graph, FakeB{})
+	instance := graph.Create()
+	assert.Equal(t, "Fake B", instance.Ber.B())
+
+	// There should no longer be an Aer in the graph
+	assert.PanicsWithValue(t,
+		"surgeon: Cannot replace type Aer. No dependency in the graph",
+		func() { surgeon.Replace[Aer](graph, A{}) })
+}

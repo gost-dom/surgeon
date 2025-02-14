@@ -80,7 +80,6 @@ func (a *GraphAnalysis[T]) buildTypeDependencies(
 	case reflect.Struct:
 		var dependencies types
 		typeDependencies := make(map[reflect.Type][]reflect.StructField)
-
 		for _, f := range reflect.VisibleFields(type_) {
 			fieldValue := v.FieldByIndex(f.Index)
 			fieldDependencies := a.buildTypeDependencies(fieldValue, visitedTypes)
@@ -161,22 +160,28 @@ func (a *GraphAnalysis[T]) replace(
 		}
 		handledFields = append(handledFields, f.Name)
 		fieldValue := objCopy.FieldByIndex(f.Index)
+		var depsRemovedInIteration types
 		if f.Type == type_ {
+			depsRemovedInIteration = a.getDependencyTypes(fieldValue.Elem().Type())
 			fieldValue.Set(newValue)
-			depsRemoved = append(depsRemoved, a.getDependencyTypes(type_)...)
 		} else {
-			newVal, depsRemovedHere := a.replace(fieldValue, newValue, type_, false)
-			fieldValue.Set(newVal)
-			for _, d := range depsRemovedHere {
-				depFields := deps[d]
-				idx := slices.IndexFunc(depFields, func(x reflect.StructField) bool { return x.Name == f.Name })
-				if idx == -1 {
-					panic("Bad field")
-				}
-				deps[d] = slices.Delete(depFields, idx, idx+1)
-			}
-			depsRemoved = append(depsRemoved, depsRemovedHere...)
+			var v reflect.Value
+			v, depsRemovedInIteration = a.replace(fieldValue, newValue, type_, false)
+			fieldValue.Set(v)
 		}
+
+		for _, d := range depsRemovedInIteration {
+			depFields := deps[d]
+			idx := slices.IndexFunc(
+				depFields,
+				func(x reflect.StructField) bool { return x.Name == f.Name },
+			)
+			if idx == -1 {
+				panic("Bad field")
+			}
+			deps[d] = slices.Delete(depFields, idx, idx+1)
+		}
+		depsRemoved = append(depsRemoved, depsRemovedInIteration...)
 	}
 	if isPointer {
 		return objCopyPtr, depsRemoved
