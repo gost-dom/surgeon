@@ -43,11 +43,18 @@ type Graph[T any] struct {
 	// has either a direct or indirect dependency to A.
 	dependencies map[reflect.Type]map[reflect.Type][]reflect.StructField
 	interfaces   []reflect.Type
+	ignoreNil    bool
 }
 
 func (a *Graph[T]) buildDependencies() {
 	a.dependencies = make(map[reflect.Type]map[reflect.Type][]reflect.StructField)
 	a.buildTypeDependencies(reflect.ValueOf(a.instance), nil)
+}
+
+func (g *Graph[T]) IgnoreNil() *Graph[T] {
+	clone := g.clone()
+	clone.ignoreNil = true
+	return clone
 }
 
 func (a *Graph[T]) buildTypeDependencies(
@@ -67,9 +74,14 @@ func (a *Graph[T]) buildTypeDependencies(
 
 	switch type_.Kind() {
 	case reflect.Interface:
-		a.interfaces = append(a.interfaces, type_)
+		if !slices.Contains(a.interfaces, type_) {
+			a.interfaces = append(a.interfaces, type_)
+		}
 		fallthrough
 	case reflect.Pointer:
+		if v.IsZero() && !a.ignoreNil {
+			panic(fmt.Sprintf("surgeon: Value for %s is nil", type_.Name()))
+		}
 		tmp := a.buildTypeDependencies(v.Elem(), visitedTypes)
 		tmp.append(type_)
 		return tmp
@@ -211,16 +223,20 @@ func Debug[T any](a *Graph[T]) string {
 	return b.String()
 }
 
+func (g *Graph[T]) clone() *Graph[T] {
+	return &Graph[T]{
+		g.instance,
+		g.dependencies,
+		g.interfaces,
+		g.ignoreNil,
+	}
+}
+
 // Create a new graph with a dependency replaced by a new implementation. Panics
 // if the root object in the graph doesn't include the replaced type in the
 // dependency tree. Panics if the replaced type isn't an interface.
 func Replace[V any, T any](a *Graph[T], instance V) *Graph[T] {
-	clone := &Graph[T]{
-		a.instance,
-		a.dependencies,
-		a.interfaces,
-	}
-
+	res := a.clone()
 	t := reflect.TypeFor[V]()
 	if t.Kind() != reflect.Interface {
 		panic("surgeon: Replaced type must be an interface")
@@ -228,6 +244,31 @@ func Replace[V any, T any](a *Graph[T], instance V) *Graph[T] {
 
 	replacedInstance, _ := a.replace(
 		reflect.ValueOf(a.instance), reflect.ValueOf(instance), t, true)
-	clone.instance = replacedInstance.Interface().(T)
-	return clone
+	res.instance = replacedInstance.Interface().(T)
+	return res
+}
+
+func ReplaceAll[T any](a *Graph[T], instance any) (res *Graph[T]) {
+	t := reflect.TypeOf(instance)
+	var interfaces []reflect.Type
+	for _, i := range a.interfaces {
+		if t.AssignableTo(i) {
+			interfaces = append(interfaces, i)
+		}
+	}
+	if len(interfaces) == 0 {
+		panic(
+			fmt.Sprintf(
+				"surgeon.ReplaceAll: Instance of type %s does not implement an interface in the dependency graph of %s (has this already been replaced in this graph?)",
+				t.Name(),
+				reflect.TypeFor[T]().Name(),
+			),
+		)
+	}
+	res = a.clone()
+	for _, i := range interfaces {
+		v, _ := res.replace(reflect.ValueOf(res.instance), reflect.ValueOf(instance), i, true)
+		res.instance = v.Interface().(T)
+	}
+	return res
 }

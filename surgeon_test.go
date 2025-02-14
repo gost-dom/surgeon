@@ -219,3 +219,35 @@ func TestReplaceDependencyInMultipleBranchesTopFirst(t *testing.T) {
 	assert.Equal(t, "Fake A", withAerReplaced.Aer.A())
 	assert.Equal(t, "Fake B", withAerReplaced.Ber.B())
 }
+
+type Cer interface{ C() string }
+type C struct{}
+
+func (c C) C() string {
+	return "Real C"
+}
+
+type FakeAandB struct{}
+
+func (FakeAandB) A() string { return "FakeAandB.A" }
+func (FakeAandB) B() string { return "FakeAandB.B" }
+
+type RootWithDepsToABC struct {
+	Aer Aer
+	Ber Ber
+	Cer Cer
+}
+
+func TestInjectingAllInterfacesFromType(t *testing.T) {
+	root := &RootWithDepsToABC{
+		Aer: A{},
+		Ber: B{Aer: A{}},
+		Cer: C{},
+	}
+	graph := surgeon.BuildGraph(root)
+	actual := surgeon.ReplaceAll(graph, FakeAandB{}).Instance()
+
+	assert.Equal(t, "FakeAandB.A", actual.Aer.A())
+	assert.Equal(t, "FakeAandB.B", actual.Ber.B())
+	assert.Equal(t, "Real C", actual.Cer.C())
+}
