@@ -12,7 +12,7 @@ type Scope interface{ InScope(reflect.Type) bool }
 type PackagePrefixScope string
 
 func (s PackagePrefixScope) InScope(t reflect.Type) bool {
-	return strings.HasPrefix(string(s), t.PkgPath())
+	return strings.HasPrefix(t.PkgPath(), string(s))
 }
 
 // Analyses a configured object. The resulting [Graph] can be used to
