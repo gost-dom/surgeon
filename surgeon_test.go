@@ -330,6 +330,26 @@ func TestReplacedDepenciesAreInitialized(t *testing.T) {
 	assert.Equal(1, cloned.InitCount, "Root init count")
 }
 
+func TestReplacedDepenciesAreInitializedNonPointer(t *testing.T) {
+	A := &InitializableA{}
+	B := InitializableBNonPointer{}
+	B.Initializable = &Initializable{}
+	B.Aer = A
+	root := InitializableRoot{
+		A: A,
+		B: B,
+		C: &InitializableC{},
+	}
+	graph := surgeon.BuildGraph(&root)
+	cloned := surgeon.Replace[Aer](graph, FakeA{}).Instance()
+	assert := assert.New(t)
+
+	// Assert clone
+	assert.Equal(0, cloned.C.(*InitializableC).InitCount, "C init count")
+	assert.Equal(1, cloned.B.(InitializableBNonPointer).InitCount, "B init count")
+	assert.Equal(1, cloned.InitCount, "Root init count")
+}
+
 func TestInitialize(t *testing.T) {
 	A := &InitializableA{}
 	B := &InitializableB{}
