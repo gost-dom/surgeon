@@ -350,6 +350,36 @@ func TestReplacedDepenciesAreInitializedNonPointer(t *testing.T) {
 	assert.Equal(1, cloned.InitCount, "Root init count")
 }
 
+type InitializableWithDep struct {
+	A Aer
+	i Initializable
+}
+
+func (d *InitializableWithDep) Init() { d.i.Init() }
+
+type RootWithEmbeddedInitializable struct {
+	InitializableWithDep
+	initCount int
+}
+
+func (i *RootWithEmbeddedInitializable) Init() {
+	i.initCount++
+}
+
+func TestReplaceDependencyOfEmbeddedInitializable(t *testing.T) {
+	// If an object embeds an initializable, it's still only the _root_ that
+	// should be considered in the graph, and Init should be called on the
+	// embedder. The embed's Init should only be called if
+	// - The embedder doesn't provide an Init itself
+	// - The embedder's Init calls the embedded Init
+	root := RootWithEmbeddedInitializable{InitializableWithDep: InitializableWithDep{A: RealA{}}}
+	graph := surgeon.BuildGraph(&root)
+	clone := surgeon.Replace[Aer](graph, FakeA{}).Instance()
+
+	assert.Equal(t, 1, clone.initCount, "Init called on root")
+	assert.Equal(t, 0, clone.InitializableWithDep.i.InitCount, "Init called on embed")
+}
+
 func TestInitialize(t *testing.T) {
 	A := &InitializableA{}
 	B := &InitializableB{}
