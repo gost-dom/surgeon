@@ -78,7 +78,8 @@ func (a *Graph[T]) inScope(t reflect.Type) bool {
 	return false
 }
 
-func isPointer(t reflect.Type) bool { return t.Kind() == reflect.Pointer }
+func isPointer(t reflect.Type) bool   { return t.Kind() == reflect.Pointer }
+func isInterface(t reflect.Type) bool { return t.Kind() == reflect.Interface }
 
 func (a *Graph[T]) buildTypeDependencies(
 	v reflect.Value,
@@ -146,6 +147,10 @@ func (a *Graph[T]) Instance() T {
 	return a.instance
 }
 
+type debugInfo struct {
+	Type reflect.Type
+}
+
 // replace rebuilds the parts of the graph in graphObj by replacing dependencies
 // of type t with the value newValue.
 //
@@ -156,12 +161,18 @@ func (a *Graph[T]) replace(
 	graphObj, newValue reflect.Value,
 	type_ reflect.Type,
 	isRoot bool,
+	stack []debugInfo,
 ) (reflect.Value, types) {
 	objType := graphObj.Type()
+	stack = append(stack, debugInfo{Type: objType})
 
-	isPointer := objType.Kind() == reflect.Pointer
 	isInterface := objType.Kind() == reflect.Interface
-	if isPointer || isInterface {
+	if isInterface {
+		graphObj = graphObj.Elem()
+		objType = graphObj.Type()
+	}
+	isPointer := objType.Kind() == reflect.Pointer
+	if isPointer {
 		graphObj = graphObj.Elem()
 		objType = graphObj.Type()
 	}
@@ -176,10 +187,13 @@ func (a *Graph[T]) replace(
 			)
 			panic(msg)
 		} else {
+			var stackInfo strings.Builder
+			for _, stack := range stack {
+				stackInfo.WriteString(fmt.Sprintf("  - Type: %s\n", printType(stack.Type)))
+			}
 			msg := fmt.Sprintf(
-				"surgeon: Dependency tree is in an inconsistent state %s has no dependency to %s. Please submit an issue at %s",
-				objType.Name(), type_.Name(),
-				newIssueUrl,
+				"surgeon: Dependency tree is in an inconsistent state %s has no dependency to %s.\n- Please submit an issue at %s\n- Type replace type stack: \n%s",
+				printType(objType), printType(type_), newIssueUrl, stackInfo.String(),
 			)
 			panic(msg)
 		}
@@ -203,7 +217,7 @@ func (a *Graph[T]) replace(
 			fieldValue.Set(newValue)
 		} else {
 			var v reflect.Value
-			v, depsRemovedInIteration = a.replace(fieldValue, newValue, type_, false)
+			v, depsRemovedInIteration = a.replace(fieldValue, newValue, type_, false, stack)
 			fieldValue.Set(v)
 		}
 
@@ -298,7 +312,7 @@ func Replace[V any, T any](a *Graph[T], instance V) *Graph[T] {
 	}
 
 	replacedInstance, _ := a.replace(
-		reflect.ValueOf(a.instance), reflect.ValueOf(instance), t, true)
+		reflect.ValueOf(a.instance), reflect.ValueOf(instance), t, true, nil)
 	res.instance = replacedInstance.Interface().(T)
 	return res
 }
@@ -322,7 +336,7 @@ func ReplaceAll[T any](a *Graph[T], instance any) (res *Graph[T]) {
 	}
 	res = a.clone()
 	for _, i := range interfaces {
-		v, _ := res.replace(reflect.ValueOf(res.instance), reflect.ValueOf(instance), i, true)
+		v, _ := res.replace(reflect.ValueOf(res.instance), reflect.ValueOf(instance), i, true, nil)
 		res.instance = v.Interface().(T)
 	}
 	return res

@@ -58,10 +58,10 @@ func TestSurgeon(t *testing.T) {
 // Just a silly interface to test interface implementation
 type Aer interface{ A() string }
 
-// A silly type implementing interface Aer
-type A struct{}
+// RealA silly type implementing interface Aer
+type RealA struct{}
 
-func (A) A() string { return "Real A" }
+func (RealA) A() string { return "Real A" }
 
 type FakeA struct{}
 
@@ -76,7 +76,7 @@ func TestReplaceSingleDependencyOnPointer(t *testing.T) {
 	tmp := NewSimpleRoot()
 	simpleRoot := &tmp
 	tree := &RootWithSingleInterfaceDependencyAndSubtree{
-		Aer:        A{},
+		Aer:        RealA{},
 		SimpleRoot: simpleRoot,
 	}
 
@@ -96,7 +96,7 @@ func TestReplaceSingleDependencyOnNonPointer(t *testing.T) {
 	tmp := NewSimpleRoot()
 	simpleRoot := &tmp
 	tree := RootWithSingleInterfaceDependencyAndSubtree{
-		Aer:        A{},
+		Aer:        RealA{},
 		SimpleRoot: simpleRoot,
 	}
 
@@ -152,9 +152,9 @@ func TestReplaceingBetweenLayersOfInterfaces(t *testing.T) {
 type Ber interface{ B() string }
 
 // A silly type implementing interface Aer
-type B struct{ Aer Aer }
+type RealB struct{ Aer Aer }
 
-func (b B) B() string { return "B says: " + b.Aer.A() }
+func (b RealB) B() string { return "B says: " + b.Aer.A() }
 
 type TypeWithLayersOfAbstraction struct {
 	Ber Ber
@@ -165,14 +165,14 @@ type FakeB struct{}
 func (FakeB) B() string { return "Fake B" }
 
 func TesReplaceInsidetLayersOfAbstractions(t *testing.T) {
-	actual := TypeWithLayersOfAbstraction{Ber: B{Aer: A{}}}
+	actual := TypeWithLayersOfAbstraction{Ber: RealB{Aer: RealA{}}}
 	graph := surgeon.BuildGraph(actual)
 	instance := surgeon.Replace[Aer](graph, FakeA{}).Instance()
 	assert.Equal(t, "B says: FakeA", instance.Ber.B())
 }
 
 func TestReplaceFirstLayersOfAbstractions(t *testing.T) {
-	actual := TypeWithLayersOfAbstraction{Ber: B{Aer: A{}}}
+	actual := TypeWithLayersOfAbstraction{Ber: RealB{Aer: RealA{}}}
 	graph := surgeon.BuildGraph(actual)
 	graph = surgeon.Replace[Ber](graph, FakeB{})
 	instance := graph.Instance()
@@ -181,7 +181,7 @@ func TestReplaceFirstLayersOfAbstractions(t *testing.T) {
 	// There should no longer be an Aer in the graph
 	assert.PanicsWithValue(t,
 		"surgeon: Cannot replace type Aer. No dependency in the graph",
-		func() { surgeon.Replace[Aer](graph, A{}) })
+		func() { surgeon.Replace[Aer](graph, RealA{}) })
 }
 
 type RootWithMultipleDepsToAer struct {
@@ -190,7 +190,7 @@ type RootWithMultipleDepsToAer struct {
 }
 
 func TestReplaceDependencyInMultipleBranches(t *testing.T) {
-	original := RootWithMultipleDepsToAer{A{}, B{A{}}}
+	original := RootWithMultipleDepsToAer{RealA{}, RealB{RealA{}}}
 	graph := surgeon.BuildGraph(original)
 
 	// Replace A
@@ -206,7 +206,7 @@ func TestReplaceDependencyInMultipleBranches(t *testing.T) {
 }
 
 func TestReplaceDependencyInMultipleBranchesTopFirst(t *testing.T) {
-	original := RootWithMultipleDepsToAer{A{}, B{A{}}}
+	original := RootWithMultipleDepsToAer{RealA{}, RealB{RealA{}}}
 	graph := surgeon.BuildGraph(original)
 
 	// Replace B
@@ -222,9 +222,9 @@ func TestReplaceDependencyInMultipleBranchesTopFirst(t *testing.T) {
 }
 
 type Cer interface{ C() string }
-type C struct{}
+type RealC struct{}
 
-func (c C) C() string {
+func (c RealC) C() string {
 	return "Real C"
 }
 
@@ -241,9 +241,9 @@ type RootWithDepsToABC struct {
 
 func TestInjectingAllInterfacesFromType(t *testing.T) {
 	root := &RootWithDepsToABC{
-		Aer: A{},
-		Ber: B{Aer: A{}},
-		Cer: C{},
+		Aer: RealA{},
+		Ber: RealB{Aer: RealA{}},
+		Cer: RealC{},
 	}
 	graph := surgeon.BuildGraph(root)
 	actual := surgeon.ReplaceAll(graph, FakeAandB{}).Instance()
@@ -263,4 +263,58 @@ func TestLimitGraphToKnownTypes(t *testing.T) {
 func TestLimitGraphToExportedNames(t *testing.T) {
 	root := &struct{ routes http.ServeMux }{}
 	surgeon.BuildGraph(root)
+}
+
+type Initializable struct {
+	InitCount int
+}
+
+func (i *Initializable) Init()            { i.InitCount++ }
+func (i Initializable) Initialized() bool { return i.InitCount > 0 }
+
+type InitializableA struct {
+	RealA
+	Initializable
+}
+
+type InitializableB struct {
+	RealB
+	Initializable
+}
+
+type InitializableC struct {
+	RealC
+	Initializable
+}
+
+type InitializableRoot struct {
+	Initializable
+	A Aer
+	B Ber
+	C Cer
+}
+
+func TestReplacedDepenciesAreInitialized(t *testing.T) {
+	A := &InitializableA{}
+	B := &InitializableB{}
+	B.Aer = A
+	root := InitializableRoot{
+		A: A,
+		B: B,
+		C: &InitializableC{},
+	}
+	graph := surgeon.BuildGraph(&root)
+	cloned := surgeon.Replace[Aer](graph, FakeA{}).Instance()
+	assert := assert.New(t)
+
+	// Assert original
+	assert.False(root.Initialized())
+	assert.False(root.A.(*InitializableA).Initialized())
+	assert.False(root.B.(*InitializableB).Initialized())
+	assert.False(root.C.(*InitializableC).Initialized())
+
+	// Assert clone
+	assert.Equal(0, cloned.C.(*InitializableC).InitCount, "C init count")
+	assert.Equal(1, cloned.B.(*InitializableB).InitCount, "B init count")
+	assert.Equal(1, cloned.InitCount, "Root init count")
 }
