@@ -267,9 +267,15 @@ func TestLimitGraphToExportedNames(t *testing.T) {
 
 type Initializable struct {
 	InitCount int
+	Callback  func()
 }
 
-func (i *Initializable) Init()            { i.InitCount++ }
+func (i *Initializable) Init() {
+	i.InitCount++
+	if i.Callback != nil {
+		i.Callback()
+	}
+}
 func (i Initializable) Initialized() bool { return i.InitCount > 0 }
 
 type InitializableA struct {
@@ -280,6 +286,11 @@ type InitializableA struct {
 type InitializableB struct {
 	RealB
 	Initializable
+}
+
+type InitializableBNonPointer struct {
+	RealB
+	*Initializable
 }
 
 type InitializableC struct {
@@ -317,4 +328,75 @@ func TestReplacedDepenciesAreInitialized(t *testing.T) {
 	assert.Equal(0, cloned.C.(*InitializableC).InitCount, "C init count")
 	assert.Equal(1, cloned.B.(*InitializableB).InitCount, "B init count")
 	assert.Equal(1, cloned.InitCount, "Root init count")
+}
+
+func TestInitialize(t *testing.T) {
+	A := &InitializableA{}
+	B := &InitializableB{}
+	C := &InitializableC{}
+	B.Aer = A
+	root := InitializableRoot{
+		A: A,
+		B: B,
+		C: C,
+	}
+	var (
+		rootOrderCheck bool
+		bOrderCheck    bool
+	)
+	root.Callback = func() {
+		rootOrderCheck = A.Initialized() && B.Initialized() && C.Initialized()
+	}
+	B.Initializable.Callback = func() {
+		bOrderCheck = A.Initialized()
+	}
+
+	surgeon.InitGraph(&root)
+
+	// Assert original
+	assert := assert.New(t)
+	assert.Equal(1, root.InitCount)
+	assert.Equal(1, root.A.(*InitializableA).InitCount)
+	assert.Equal(1, root.B.(*InitializableB).InitCount)
+	assert.Equal(1, root.C.(*InitializableC).InitCount)
+
+	assert.True(rootOrderCheck, "Dependencies were initialized before root")
+	assert.True(bOrderCheck, "A initialized before B")
+}
+
+func TestInitializeWithNoPointer(t *testing.T) {
+	var (
+		rootOrderCheck bool
+		bOrderCheck    bool
+	)
+
+	A := &InitializableA{}
+	B := InitializableBNonPointer{}
+	B.Initializable = &Initializable{}
+	C := &InitializableC{}
+	B.Aer = A
+	B.Initializable.Callback = func() {
+		bOrderCheck = A.Initialized()
+	}
+	root := InitializableRoot{
+		A: A,
+		B: B,
+		C: C,
+	}
+	root.Callback = func() {
+		rootOrderCheck = A.Initialized() && root.B.(InitializableBNonPointer).Initialized() &&
+			C.Initialized()
+	}
+
+	surgeon.InitGraph(&root, surgeon.PackagePrefixScope("github.com/gost-dom"))
+
+	// Assert original
+	assert := assert.New(t)
+	assert.Equal(1, root.InitCount)
+	assert.Equal(1, root.A.(*InitializableA).InitCount, "A init count")
+	assert.Equal(1, root.B.(InitializableBNonPointer).InitCount, "B init count")
+	assert.Equal(1, root.C.(*InitializableC).InitCount, "C init count")
+
+	assert.True(rootOrderCheck, "Dependencies were initialized before root")
+	assert.True(bOrderCheck, "A initialized before B")
 }

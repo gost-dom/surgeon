@@ -19,8 +19,21 @@ func (s PackagePrefixScope) InScope(t reflect.Type) bool {
 // replace dependencies.
 func BuildGraph[T any](instance T, scopes ...Scope) *Graph[T] {
 	result := &Graph[T]{instance: instance, scopes: scopes}
-	result.buildDependencies()
+	result.buildDependencies(false)
 	return result
+}
+
+// Analyses and initialises the configured object. The resulting [Graph] can be used to
+// replace dependencies.
+//
+// The graph is identical to the result of [BuildGraph], but this function
+// implicitly initializes all components in the graph that implements the
+// `Initer` interface
+func InitGraph[T any](instance T, scopes ...Scope) *Graph[T] {
+	result := &Graph[T]{instance: instance, scopes: scopes}
+	result.buildDependencies(true)
+	return result
+
 }
 
 type types []reflect.Type
@@ -50,14 +63,19 @@ type Graph[T any] struct {
 	// type (A) in the second map, which tells which fields in the instance that
 	// has either a direct or indirect dependency to A.
 	dependencies map[reflect.Type]map[reflect.Type][]reflect.StructField
+	initialized  map[reflect.Type]bool
+	initializedV map[reflect.Value]bool
 	interfaces   []reflect.Type
 	ignoreNil    bool
 	scopes       []Scope
 }
 
-func (a *Graph[T]) buildDependencies() {
+func (a *Graph[T]) buildDependencies(init bool) {
 	a.dependencies = make(map[reflect.Type]map[reflect.Type][]reflect.StructField)
-	a.buildTypeDependencies(reflect.ValueOf(a.instance), nil)
+	a.initialized = make(map[reflect.Type]bool)
+	a.initializedV = make(map[reflect.Value]bool)
+	v := reflect.ValueOf(a.instance)
+	a.buildTypeDependencies(v, v, init, nil)
 }
 
 func (g *Graph[T]) IgnoreNil() *Graph[T] {
@@ -81,8 +99,15 @@ func (a *Graph[T]) inScope(t reflect.Type) bool {
 func isPointer(t reflect.Type) bool   { return t.Kind() == reflect.Pointer }
 func isInterface(t reflect.Type) bool { return t.Kind() == reflect.Interface }
 
+// Builds the dependency graph, and potentially initializes objects.
+// - v is object being iterated for the dependency graph
+// - initValue is the value that should be initialized (if enabled).
+// - init indicates of values should be initialized
+// - visitedTypes if for troubleshooting the code only.
 func (a *Graph[T]) buildTypeDependencies(
 	v reflect.Value,
+	initValue reflect.Value,
+	init bool,
 	visitedTypes []reflect.Type,
 ) types {
 	type_ := v.Type()
@@ -119,8 +144,16 @@ func (a *Graph[T]) buildTypeDependencies(
 				),
 			)
 		}
-		tmp := a.buildTypeDependencies(v.Elem(), visitedTypes)
+		e := v.Elem()
+		newInitValue := e
+		if v != initValue {
+			newInitValue = initValue
+		}
+		tmp := a.buildTypeDependencies(e, newInitValue, init, visitedTypes)
 		tmp.append(type_)
+		if v == initValue {
+			a.initValue(v, init)
+		}
 		return tmp
 	case reflect.Struct:
 		var dependencies types
@@ -129,8 +162,22 @@ func (a *Graph[T]) buildTypeDependencies(
 			if !f.IsExported() {
 				continue
 			}
+			if len(f.Index) > 1 {
+				continue
+			}
 			fieldValue := v.FieldByIndex(f.Index)
-			fieldDependencies := a.buildTypeDependencies(fieldValue, visitedTypes)
+			initValue := fieldValue
+
+			// If the current field is anonymous and implement the `Initer`
+			// interface; it should not be called; as _this type_ also
+			// implements `Initer`, and it's _that_ implementation that should
+			// be called. This could potentially lead to an invalid
+			// initialization due to either calling a function that shouldn't be
+			// called, or calling Init twice.
+			if f.Anonymous {
+				initValue = v
+			}
+			fieldDependencies := a.buildTypeDependencies(fieldValue, initValue, init, visitedTypes)
 			dependencies.append(fieldDependencies...)
 			for _, depType := range fieldDependencies {
 				typeDependencies[depType] = append(typeDependencies[depType], f)
@@ -138,9 +185,43 @@ func (a *Graph[T]) buildTypeDependencies(
 		}
 		a.dependencies[type_] = typeDependencies
 		dependencies.append(type_)
+		a.initValue(initValue, init)
 		return dependencies
 	}
 	return nil
+}
+
+func underlyingType(t reflect.Type) reflect.Type {
+	for isInterface(t) || isPointer(t) {
+		t = t.Elem()
+	}
+	return t
+}
+
+func (g *Graph[T]) initValue(v reflect.Value, init bool) {
+	if init {
+		t := v.Type()
+		if isInterface(t) {
+			// We will initialize the underlying type. Don't init twice
+			return
+		}
+		p := isPointer(t)
+		typeInitialized := g.initialized[v.Type()]
+		valueInitialized := g.initializedV[v]
+		if v.Type().Name() == "InitializableBNonPointer" ||
+			(underlyingType(v.Type()).Name() == "Initializable") ||
+			(isPointer(v.Type()) &&
+				v.Type().Elem().Name() == "InitializableBNonPointer") {
+		}
+		typeInitialized = typeInitialized && p
+		valueInitialized = valueInitialized && !p
+		alreadyInitialized := typeInitialized || valueInitialized
+		if i, ok := v.Interface().(Initer); ok && !alreadyInitialized {
+			i.Init()
+			g.initialized[v.Type()] = true
+			g.initializedV[v] = true
+		}
+	}
 }
 
 func (a *Graph[T]) Instance() T {
@@ -295,6 +376,8 @@ func (g *Graph[T]) clone() *Graph[T] {
 	return &Graph[T]{
 		g.instance,
 		g.dependencies,
+		g.initialized,
+		g.initializedV,
 		g.interfaces,
 		g.ignoreNil,
 		g.scopes,
