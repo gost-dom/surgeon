@@ -450,3 +450,21 @@ func TestInitializeWithNoPointer(t *testing.T) {
 	assert.True(rootOrderCheck, "Dependencies were initialized before root")
 	assert.True(bOrderCheck, "A initialized before B")
 }
+
+type RootWithSimplInterfaceDependency struct {
+	A Aer
+	B Ber
+}
+
+func TestUseAsADIFramework(t *testing.T) {
+	root := &RootWithSimplInterfaceDependency{B: new(RealB)}
+	g := surgeon.BuildGraph(root)
+	instance1 := surgeon.ReplaceAll(g, RealA{}).Instance()
+	assert.Equal(t, "Real A", instance1.A.A())
+
+	g = surgeon.ReplaceAll(g, RealB{})
+	g = surgeon.ReplaceAll(g, FakeA{})
+	instance2 := g.Instance() //surgeon.ReplaceAll(g, FakeA{}).Instance()
+
+	assert.Equal(t, "B says: Fake A", instance2.B.B())
+}

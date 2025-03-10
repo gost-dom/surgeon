@@ -39,6 +39,9 @@ func InitGraph[T any](instance T, scopes ...Scope) *Graph[T] {
 type types []reflect.Type
 
 func (t *types) append(types ...reflect.Type) {
+	if t == nil {
+		panic("Appending to nil")
+	}
 	for _, type_ := range types {
 		*t = append(*t, type_)
 	}
@@ -103,7 +106,7 @@ func isInterface(t reflect.Type) bool { return t.Kind() == reflect.Interface }
 // - v is object being iterated for the dependency graph
 // - initValue is the value that should be initialized (if enabled).
 // - init indicates of values should be initialized
-// - visitedTypes if for troubleshooting the code only.
+// - visitedTypes is for troubleshooting the code only.
 func (a *Graph[T]) buildTypeDependencies(
 	v reflect.Value,
 	initValue reflect.Value,
@@ -126,11 +129,12 @@ func (a *Graph[T]) buildTypeDependencies(
 
 	switch type_.Kind() {
 	case reflect.Interface:
-		if v.IsZero() && !a.ignoreNil {
-			panic(fmt.Sprintf("surgeon: Value for %s (%s) is nil", type_.Name(), type_.PkgPath()))
-		}
 		if !slices.Contains(a.interfaces, type_) {
 			a.interfaces = append(a.interfaces, type_)
+		}
+		if v.IsZero() && !a.ignoreNil {
+			return types{type_}
+			// panic(fmt.Sprintf("surgeon: Value for %s (%s) is nil", type_.Name(), type_.PkgPath()))
 		}
 		fallthrough
 	case reflect.Pointer:
@@ -294,7 +298,9 @@ func (a *Graph[T]) replace(
 		fieldValue := objCopy.FieldByIndex(f.Index)
 		var depsRemovedInIteration types
 		if f.Type == type_ {
-			depsRemovedInIteration = a.getDependencyTypes(fieldValue.Elem().Type())
+			if !fieldValue.IsZero() {
+				depsRemovedInIteration = a.getDependencyTypes(fieldValue.Elem().Type())
+			}
 			fieldValue.Set(newValue)
 		} else {
 			var v reflect.Value
