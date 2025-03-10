@@ -406,10 +406,15 @@ func Replace[V any, T any](a *Graph[T], instance V) *Graph[T] {
 	return res
 }
 
-func ReplaceAll[T any](a *Graph[T], instance any) (res *Graph[T]) {
+// Inject injects a dependency into an existing graph. This is a mutating
+// operation. Dependencies are replaced in the same was as ReplaceAll
+//
+// The intended use is building the object graph at application startup. When
+// replacing dependencies in testing, use Replace or ReplaceAll
+func (g *Graph[T]) Inject(instance any) {
 	t := reflect.TypeOf(instance)
 	var interfaces []reflect.Type
-	for _, i := range a.interfaces {
+	for _, i := range g.interfaces {
 		if t.AssignableTo(i) {
 			interfaces = append(interfaces, i)
 		}
@@ -423,10 +428,26 @@ func ReplaceAll[T any](a *Graph[T], instance any) (res *Graph[T]) {
 			),
 		)
 	}
-	res = a.clone()
 	for _, i := range interfaces {
-		v, _ := res.replace(reflect.ValueOf(res.instance), reflect.ValueOf(instance), i, true, nil)
-		res.instance = v.Interface().(T)
+		v, _ := g.replace(reflect.ValueOf(g.instance), reflect.ValueOf(instance), i, true, nil)
+		g.instance = v.Interface().(T)
 	}
+}
+
+// Replace replaces a single dependency of the graph, and returns a partial
+// clone. Any object in the graph that doesn't have a dependency is untouched,
+// other objects are duplicated, and reinitialized.
+//
+// The intended use is for testing, where each test case needs its own clone for
+// test isolation.
+func (g *Graph[T]) ReplaceAll(instance any) *Graph[T] {
+	res := g.clone()
+	res.Inject(instance)
+	return res
+}
+
+func ReplaceAll[T any](a *Graph[T], instance any) (res *Graph[T]) {
+	res = a.clone()
+	res.Inject(instance)
 	return res
 }
