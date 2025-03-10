@@ -464,7 +464,13 @@ func TestUseAsADIFramework(t *testing.T) {
 
 	g = surgeon.ReplaceAll(g, RealB{})
 	g = surgeon.ReplaceAll(g, FakeA{})
-	instance2 := g.Instance() //surgeon.ReplaceAll(g, FakeA{}).Instance()
+	instance2 := g.Instance()
 
 	assert.Equal(t, "B says: Fake A", instance2.B.B())
+}
+
+func TestDIUpdatesUsedInterfaces(t *testing.T) {
+	g := surgeon.BuildGraph(&RealB{})
+	instance := surgeon.ReplaceAll(g, FakeA{}).Instance()
+	assert.Equal(t, "B says: Fake A", instance.B())
 }
