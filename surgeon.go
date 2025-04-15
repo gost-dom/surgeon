@@ -79,6 +79,25 @@ type Graph[T any] struct {
 	scopes []Scope
 }
 
+func mergeDeps[T any, U any](dst *Graph[T], src *Graph[U]) {
+	for k, v := range src.dependencies {
+		if dst2, ok := dst.dependencies[k]; !ok {
+			dst.dependencies[k] = v
+		} else {
+			for k2, v2 := range v {
+				if _, ok := dst2[k2]; ok {
+					dst2[k2] = append(dst2[k2], v2...)
+				} else {
+					dst2[k2] = v2
+				}
+			}
+		}
+	}
+	for _, intf := range src.interfaces {
+		dst.registerInterface(intf)
+	}
+}
+
 func (a *Graph[T]) buildDependencies() {
 	a.dependencies = make(map[reflect.Type]map[reflect.Type][]reflect.StructField)
 	v := reflect.ValueOf(a.instance)
@@ -99,6 +118,12 @@ func (a *Graph[T]) inScope(t reflect.Type) bool {
 
 func isPointer(t reflect.Type) bool   { return t.Kind() == reflect.Pointer }
 func isInterface(t reflect.Type) bool { return t.Kind() == reflect.Interface }
+
+func (g *Graph[T]) registerInterface(intfType reflect.Type) {
+	if !slices.Contains(g.interfaces, intfType) {
+		g.interfaces = append(g.interfaces, intfType)
+	}
+}
 
 // Builds the dependency graph, and potentially initializes objects.
 // - v is object being iterated for the dependency graph
@@ -129,9 +154,7 @@ func (a *Graph[T]) buildTypeDependencies(
 
 	switch type_.Kind() {
 	case reflect.Interface:
-		if !slices.Contains(a.interfaces, type_) {
-			a.interfaces = append(a.interfaces, type_)
-		}
+		a.registerInterface(type_)
 		if v.IsZero() {
 			return types{type_}
 			// panic(fmt.Sprintf("surgeon: Value for %s (%s) is nil", type_.Name(), type_.PkgPath()))
@@ -209,6 +232,7 @@ func (a *Graph[T]) replace(
 	graphObj, newValue reflect.Value,
 	type_ reflect.Type,
 	isRoot bool,
+	replacedDeps []reflect.Type,
 	stack []debugInfo,
 ) (reflect.Value, types) {
 	objType := graphObj.Type()
@@ -265,9 +289,14 @@ func (a *Graph[T]) replace(
 				depsRemovedInIteration = a.getDependencyTypes(fieldValue.Elem().Type())
 			}
 			fieldValue.Set(newValue)
+			for _, newDep := range replacedDeps {
+				fields := deps[newDep]
+				fields = append(fields, f)
+				deps[newDep] = fields
+			}
 		} else {
 			var v reflect.Value
-			v, depsRemovedInIteration = a.replace(fieldValue, newValue, type_, false, stack)
+			v, depsRemovedInIteration = a.replace(fieldValue, newValue, type_, false, nil, stack)
 			fieldValue.Set(v)
 		}
 
@@ -338,6 +367,10 @@ func Debug[T any](a *Graph[T]) string {
 			}
 		}
 	}
+	b.WriteString("Registered interfaces:\n")
+	for _, t := range a.interfaces {
+		b.WriteString(fmt.Sprintf("- %s\n", printType(t)))
+	}
 	return b.String()
 }
 
@@ -360,9 +393,22 @@ func Replace[V any, T any](a *Graph[T], instance V) *Graph[T] {
 		panic("surgeon: Replaced type must be an interface")
 	}
 
+	depGraph := BuildGraph(instance, a.scopes...)
+	fmt.Println("Merged deps\n", Debug(depGraph))
+	var allDeps []reflect.Type
+	for dep, fields := range depGraph.dependencies[reflect.TypeOf(instance)] {
+		deps := make([]reflect.Type, len(fields))
+		for i := range fields {
+			deps[i] = dep
+		}
+		allDeps = append(allDeps, deps...)
+	}
+	allDeps = append(allDeps, reflect.TypeOf(instance))
+
 	replacedInstance, _ := a.replace(
-		reflect.ValueOf(a.instance), reflect.ValueOf(instance), t, true, nil)
+		reflect.ValueOf(a.instance), reflect.ValueOf(instance), t, true, allDeps, nil)
 	res.instance = replacedInstance.Interface().(T)
+	mergeDeps(res, depGraph)
 	return res
 }
 
@@ -389,7 +435,7 @@ func (g *Graph[T]) Inject(instance any) {
 		)
 	}
 	for _, i := range interfaces {
-		v, _ := g.replace(reflect.ValueOf(g.instance), reflect.ValueOf(instance), i, true, nil)
+		v, _ := g.replace(reflect.ValueOf(g.instance), reflect.ValueOf(instance), i, true, nil, nil)
 		g.instance = v.Interface().(T)
 	}
 }
