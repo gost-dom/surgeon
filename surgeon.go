@@ -191,13 +191,6 @@ func (a *Graph[T]) buildTypeDependencies(
 	return nil
 }
 
-func underlyingType(t reflect.Type) reflect.Type {
-	for isInterface(t) || isPointer(t) {
-		t = t.Elem()
-	}
-	return t
-}
-
 func (a *Graph[T]) Instance() T {
 	return a.instance
 }
