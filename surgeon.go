@@ -2,6 +2,7 @@ package surgeon
 
 import (
 	"fmt"
+	"maps"
 	"reflect"
 	"slices"
 	"strings"
@@ -21,6 +22,10 @@ type PackagePrefixScope string
 func (s PackagePrefixScope) InScope(t reflect.Type) bool {
 	return strings.HasPrefix(t.PkgPath(), string(s))
 }
+
+// Set this to true to make surgeon trigger explicit consistency checks and
+// debug output.
+var DiagnosticsMode bool
 
 // Analyses a configured object. The resulting [Graph] can be used to
 // replace dependencies.
@@ -55,10 +60,13 @@ func (t *types) append(types ...reflect.Type) {
 func (t types) String() string {
 	names := make([]string, len(t))
 	for i, typ := range t {
-		names[i] = typ.Name()
+		names[i] = printType(typ)
 	}
 	return strings.Join(names, ", ")
 }
+
+type graphDependency = map[reflect.Type][]reflect.StructField
+type graphDependencies = map[reflect.Type]graphDependency
 
 // The Graph is the result of analysing a real object graph.
 type Graph[T any] struct {
@@ -124,6 +132,12 @@ func (g *Graph[T]) registerInterface(intfType reflect.Type) {
 		g.interfaces = append(g.interfaces, intfType)
 	}
 }
+func (g *Graph[T]) removeInterface(intfType reflect.Type) {
+	fmt.Println("Remove interface", intfType.Name())
+	g.interfaces = slices.DeleteFunc(g.interfaces, func(t reflect.Type) bool {
+		return t == intfType
+	})
+}
 
 // Builds the dependency graph, and potentially initializes objects.
 // - v is object being iterated for the dependency graph
@@ -162,14 +176,7 @@ func (a *Graph[T]) buildTypeDependencies(
 		fallthrough
 	case reflect.Pointer:
 		if v.IsZero() {
-			innerType := type_.Elem()
-			panic(
-				fmt.Sprintf(
-					"surgeon: nil value for *%s (%s)",
-					innerType.Name(),
-					innerType.PkgPath(),
-				),
-			)
+			panic(fmt.Sprintf("surgeon: nil value: %s", printType(type_)))
 		}
 		e := v.Elem()
 		newInitValue := e
@@ -222,6 +229,30 @@ type debugInfo struct {
 	Type reflect.Type
 }
 
+func (g *Graph[T]) cleanTypes(types []reflect.Type) (res bool) {
+	for _, t := range types {
+		found := false
+		for _, v := range g.dependencies {
+			v2, f := v[t]
+			if len(v2) == 0 {
+				if f {
+					delete(v, t)
+				}
+			} else {
+				found = true
+			}
+		}
+		if !found {
+			g.removeInterface(t)
+			if g.dependencies[t] != nil {
+				delete(g.dependencies, t)
+				res = true
+			}
+		}
+	}
+	return
+}
+
 // replace rebuilds the parts of the graph in graphObj by replacing dependencies
 // of type t with the value newValue.
 //
@@ -243,8 +274,8 @@ func (a *Graph[T]) replace(
 		graphObj = graphObj.Elem()
 		objType = graphObj.Type()
 	}
-	isPointer := objType.Kind() == reflect.Pointer
-	if isPointer {
+	thisIsPointer := objType.Kind() == reflect.Pointer
+	if thisIsPointer {
 		graphObj = graphObj.Elem()
 		objType = graphObj.Type()
 	}
@@ -286,20 +317,19 @@ func (a *Graph[T]) replace(
 		var depsRemovedInIteration types
 		if f.Type == type_ {
 			if !fieldValue.IsZero() {
-				depsRemovedInIteration = a.getDependencyTypes(fieldValue.Elem().Type())
+				elemType := fieldValue.Elem().Type()
+				depsRemovedInIteration = a.getDependencyTypes(elemType)
+				depsRemovedInIteration.append(elemType)
+				if isPointer(elemType) {
+					depsRemovedInIteration.append(elemType.Elem())
+				}
 			}
 			fieldValue.Set(newValue)
-			for _, newDep := range replacedDeps {
-				fields := deps[newDep]
-				fields = append(fields, f)
-				deps[newDep] = fields
-			}
 		} else {
 			var v reflect.Value
-			v, depsRemovedInIteration = a.replace(fieldValue, newValue, type_, false, nil, stack)
+			v, depsRemovedInIteration = a.replace(fieldValue, newValue, type_, false, replacedDeps, stack)
 			fieldValue.Set(v)
 		}
-
 		for _, d := range depsRemovedInIteration {
 			depFields := deps[d]
 			idx := slices.IndexFunc(
@@ -311,11 +341,17 @@ func (a *Graph[T]) replace(
 			}
 			deps[d] = slices.Delete(depFields, idx, idx+1)
 		}
+		for _, newDep := range replacedDeps {
+			fields := deps[newDep]
+			fields = append(fields, f)
+			deps[newDep] = fields
+		}
+
 		depsRemoved = append(depsRemoved, depsRemovedInIteration...)
 	}
 
 	var result reflect.Value
-	if isPointer {
+	if thisIsPointer {
 		result = objCopyPtr
 	} else {
 		result = objCopy
@@ -330,6 +366,10 @@ type Initer interface{ Init() }
 
 func (a *Graph[T]) getDependencyTypes(t reflect.Type) types {
 	var res types
+	// pointer type dependencies are not registered
+	if isPointer(t) {
+		t = t.Elem()
+	}
 	for k, v := range a.dependencies[t] {
 		for range v {
 			res = append(res, k)
@@ -345,14 +385,51 @@ func printType(t reflect.Type) string {
 	return fmt.Sprintf("%s (%s)", t.Name(), t.PkgPath())
 }
 
+type kv[T any, U any] struct {
+	k T
+	v U
+}
+
+func iterateStringMapSorted[T any](types map[string]T) []kv[string, T] {
+	keys := make([]string, 0, len(types))
+	for k := range types {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	res := make([]kv[string, T], len(keys))
+	for i, k := range keys {
+		res[i] = kv[string, T]{k, types[k]}
+	}
+	return res
+}
+func iterateTypesSorted[T any](types map[reflect.Type]T) []kv[reflect.Type, T] {
+	keys := make([]reflect.Type, 0, len(types))
+	for k := range types {
+		keys = append(keys, k)
+	}
+	slices.SortFunc(
+		keys,
+		func(x, y reflect.Type) int { return strings.Compare(x.Name(), y.Name()) },
+	)
+	res := make([]kv[reflect.Type, T], len(keys))
+	for i, k := range keys {
+		res[i] = kv[reflect.Type, T]{k, types[k]}
+	}
+	return res
+}
+
 func Debug[T any](a *Graph[T]) string {
 	var b strings.Builder
 	b.WriteString("Registered types:\n")
-	for k, v := range a.dependencies {
+	for _, kv := range iterateTypesSorted(a.dependencies) {
+		k := kv.k
+		v := kv.v
 		fieldToDeps := make(map[string][]reflect.Type)
 		b.WriteString(fmt.Sprintf(" - %s\n", k.Name()))
 		b.WriteString("    By dependency\n")
-		for k2, f := range v {
+		for _, kv2 := range iterateTypesSorted(v) {
+			k2 := kv2.k
+			f := kv2.v
 			b.WriteString(fmt.Sprintf("     - %s (count: %d)\n", printType(k2), len(f)))
 			for _, d := range f {
 				n := d.Name
@@ -360,7 +437,9 @@ func Debug[T any](a *Graph[T]) string {
 			}
 		}
 		b.WriteString("    By field\n")
-		for n, deps := range fieldToDeps {
+		for _, kv := range iterateStringMapSorted(fieldToDeps) {
+			n := kv.k
+			deps := kv.v
 			b.WriteString(fmt.Sprintf("    - %s\n", n))
 			for _, d := range deps {
 				b.WriteString(fmt.Sprintf("      - %s\n", printType(d)))
@@ -374,13 +453,41 @@ func Debug[T any](a *Graph[T]) string {
 	return b.String()
 }
 
+func cloneDependencies(d graphDependencies) graphDependencies {
+	res := make(graphDependencies)
+	for k, v := range d {
+		d := make(graphDependency)
+		maps.Copy(d, v)
+		res[k] = d
+	}
+	return res
+}
+
 func (g *Graph[T]) clone() *Graph[T] {
 	return &Graph[T]{
 		g.instance,
-		g.dependencies,
+		cloneDependencies(g.dependencies),
 		g.interfaces,
 		g.scopes,
 	}
+}
+
+func allDepsOfNewInstance(instance any, scopes []Scope) (types, *Graph[any]) {
+	injectedType := reflect.TypeOf(instance)
+	var allDeps []reflect.Type
+	depGraph := BuildGraph[any](instance, scopes...)
+	for dep, fields := range depGraph.dependencies[injectedType] {
+		deps := make([]reflect.Type, len(fields))
+		for i := range fields {
+			deps[i] = dep
+		}
+		allDeps = append(allDeps, deps...)
+	}
+	allDeps = append(allDeps, injectedType)
+	if isPointer(injectedType) {
+		allDeps = append(allDeps, injectedType.Elem())
+	}
+	return allDeps, depGraph
 }
 
 // Create a new graph with a dependency replaced by a new implementation. Panics
@@ -393,22 +500,51 @@ func Replace[V any, T any](a *Graph[T], instance V) *Graph[T] {
 		panic("surgeon: Replaced type must be an interface")
 	}
 
-	depGraph := BuildGraph(instance, a.scopes...)
-	fmt.Println("Merged deps\n", Debug(depGraph))
-	var allDeps []reflect.Type
-	for dep, fields := range depGraph.dependencies[reflect.TypeOf(instance)] {
-		deps := make([]reflect.Type, len(fields))
-		for i := range fields {
-			deps[i] = dep
-		}
-		allDeps = append(allDeps, deps...)
-	}
-	allDeps = append(allDeps, reflect.TypeOf(instance))
+	allDeps, depGraph := allDepsOfNewInstance(instance, a.scopes)
 
-	replacedInstance, _ := a.replace(
+	replacedInstance, removedTypes := res.replace(
 		reflect.ValueOf(a.instance), reflect.ValueOf(instance), t, true, allDeps, nil)
-	res.instance = replacedInstance.Interface().(T)
+	for res.cleanTypes(removedTypes) {
+	}
 	mergeDeps(res, depGraph)
+
+	res.instance = replacedInstance.Interface().(T)
+
+	if DiagnosticsMode {
+		expectedGraph := BuildGraph(res.instance, a.scopes...)
+		if !reflect.DeepEqual(expectedGraph, res) {
+			fmt.Println(
+				"Objects identical: ",
+				reflect.DeepEqual(expectedGraph.instance, res.instance),
+			)
+			fmt.Println(
+				"Scopes identical: ",
+				reflect.DeepEqual(expectedGraph.scopes, res.scopes),
+			)
+			fmt.Println(
+				"Dependencies identical: ",
+				reflect.DeepEqual(expectedGraph.dependencies, res.dependencies),
+			)
+			fmt.Println(
+				"Interfaces identical: ",
+				reflect.DeepEqual(expectedGraph.interfaces, res.interfaces),
+			)
+			panic(fmt.Sprintf(`  --- Surgeon inconsistency detected ---
+
+## Expected graph:
+%s
+
+## Actual graph:
+%s
+
+## Original graph:
+%s
+
+## Graph of new dependency:
+%s
+	`, Debug(expectedGraph), Debug(res), Debug(a), Debug(depGraph)))
+		}
+	}
 	return res
 }
 
@@ -418,6 +554,7 @@ func Replace[V any, T any](a *Graph[T], instance V) *Graph[T] {
 // The intended use is building the object graph at application startup. When
 // replacing dependencies in testing, use Replace or ReplaceAll
 func (g *Graph[T]) Inject(instance any) {
+	allDeps, depGraph := allDepsOfNewInstance(instance, g.scopes)
 	t := reflect.TypeOf(instance)
 	var interfaces []reflect.Type
 	for _, i := range g.interfaces {
@@ -435,9 +572,19 @@ func (g *Graph[T]) Inject(instance any) {
 		)
 	}
 	for _, i := range interfaces {
-		v, _ := g.replace(reflect.ValueOf(g.instance), reflect.ValueOf(instance), i, true, nil, nil)
+		v, removedTypes := g.replace(
+			reflect.ValueOf(g.instance),
+			reflect.ValueOf(instance),
+			i,
+			true,
+			allDeps,
+			nil,
+		)
 		g.instance = v.Interface().(T)
+		for g.cleanTypes(removedTypes) {
+		}
 	}
+	mergeDeps(g, depGraph)
 }
 
 // Replace replaces a single dependency of the graph, and returns a partial

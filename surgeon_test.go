@@ -13,7 +13,6 @@ package surgeon_test
 import (
 	"bytes"
 	"encoding/gob"
-	"fmt"
 	"net/http"
 	"reflect"
 	"testing"
@@ -411,4 +410,8 @@ func TestFulfillingADependencyWithANewDependency(t *testing.T) {
 	g = surgeon.Replace[Ber](g, RealB{})
 	g = surgeon.Replace[Aer](g, RealA{})
 	assert.Equal(t, "B says: Real A", g.Instance().B.B())
+}
+
+func init() {
+	surgeon.DiagnosticsMode = true
 }
