@@ -404,7 +404,7 @@ func iterateTypesSorted[T any](types map[reflect.Type]T) []kv[reflect.Type, T] {
 	}
 	slices.SortFunc(
 		keys,
-		func(x, y reflect.Type) int { return strings.Compare(x.Name(), y.Name()) },
+		func(x, y reflect.Type) int { return strings.Compare(printType(x), printType(y)) },
 	)
 	res := make([]kv[reflect.Type, T], len(keys))
 	for i, k := range keys {
