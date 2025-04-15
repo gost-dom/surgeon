@@ -132,7 +132,10 @@ func (g *Graph[T]) registerInterface(intfType reflect.Type) {
 	g.interfaces[intfType] = struct{}{}
 }
 func (g *Graph[T]) removeInterface(intfType reflect.Type) {
-	delete(g.interfaces, intfType)
+	if _, found := g.interfaces[intfType]; found {
+		fmt.Println("Remove interface: ", printType(intfType))
+		delete(g.interfaces, intfType)
+	}
 }
 
 // Builds the dependency graph, and potentially initializes objects.
@@ -547,7 +550,7 @@ func (g *Graph[T]) clone() *Graph[T] {
 	return &Graph[T]{
 		g.instance,
 		cloneDependencies(g.dependencies),
-		g.interfaces,
+		maps.Clone(g.interfaces),
 		g.scopes,
 	}
 }
@@ -669,10 +672,10 @@ func (g *Graph[T]) Inject(instance any) {
 			allDeps,
 			nil,
 		)
-		g.instance = v.Interface().(T)
 		for g.cleanTypes(removedTypes) {
 		}
 		mergeDeps(g, depGraph)
+		g.instance = v.Interface().(T)
 	}
 }
 
