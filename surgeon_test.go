@@ -420,6 +420,22 @@ func TestFulfillingADependencyWithANewPointerDependency(t *testing.T) {
 	assert.Equal(t, "B says: Real A", g.Instance().B.B())
 }
 
+type X struct{ B RealB }
+type Y struct{ B RealB }
+type XYRoot struct {
+	X X
+	Y Y
+}
+
+func TestFulfillingADependencyWithMultiplePaths(t *testing.T) {
+	//t.SkipNow()
+	var root = XYRoot{}
+	g := surgeon.BuildGraph(&root)
+	g = surgeon.Replace[Aer](g, RealA{})
+	assert.Equal(t, "B says: Real A", g.Instance().X.B.B())
+	assert.Equal(t, "B says: Real A", g.Instance().Y.B.B())
+}
+
 func init() {
 	surgeon.DiagnosticsMode = true
 }

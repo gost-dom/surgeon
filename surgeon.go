@@ -2,7 +2,6 @@ package surgeon
 
 import (
 	"fmt"
-	"maps"
 	"reflect"
 	"slices"
 	"strings"
@@ -248,6 +247,46 @@ func (g *Graph[T]) cleanTypes(types []reflect.Type) (res bool) {
 	return
 }
 
+func getFieldDeps(graph graphDependencies, t reflect.Type, f reflect.StructField) types {
+	var res types
+	// for _, v := range g.dependencies {
+	for tt, ff := range graph[t] {
+		for _, field := range ff {
+			if f.Name == field.Name {
+				res.append(tt)
+			}
+		}
+	}
+	// }
+	return res
+}
+func (g *Graph[T]) getFieldDeps(t reflect.Type, f reflect.StructField) types {
+	var res types
+	// for _, v := range g.dependencies {
+	for tt, ff := range g.dependencies[t] {
+		for _, field := range ff {
+			if f.Name == field.Name {
+				res.append(tt)
+			}
+		}
+	}
+	// }
+	return res
+}
+
+func (a *Graph[T]) setFieldDeps(t reflect.Type, deps types, field reflect.StructField) {
+	oldDeps := a.dependencies[t]
+	for k, v := range oldDeps {
+		oldDeps[k] = slices.DeleteFunc(
+			v,
+			func(x reflect.StructField) bool { return x.Name == field.Name },
+		)
+	}
+	for _, dep := range deps {
+		oldDeps[dep] = append(oldDeps[dep], field)
+	}
+}
+
 // replace rebuilds the parts of the graph in graphObj by replacing dependencies
 // of type t with the value newValue.
 //
@@ -256,11 +295,12 @@ func (g *Graph[T]) cleanTypes(types []reflect.Type) (res bool) {
 // only to create a helpful error message, "It's not you, it's us!".
 func (a *Graph[T]) replace(
 	graphObj, newValue reflect.Value,
+	orgDeps graphDependencies,
 	type_ reflect.Type,
 	isRoot bool,
 	replacedDeps []reflect.Type,
 	stack []debugInfo,
-) (reflect.Value, types) {
+) (reflect.Value, types, types) {
 	objType := graphObj.Type()
 	stack = append(stack, debugInfo{Type: objType})
 
@@ -276,7 +316,7 @@ func (a *Graph[T]) replace(
 	}
 
 	deps := a.dependencies[objType]
-	fieldsToUpdate := deps[type_]
+	fieldsToUpdate := slices.Clone(deps[type_])
 	if len(fieldsToUpdate) == 0 {
 		if isRoot {
 			msg := fmt.Sprintf(
@@ -302,6 +342,7 @@ func (a *Graph[T]) replace(
 	objCopy.Set(graphObj)
 
 	var depsRemoved types
+	var depsAdded types
 	var handledFields []string
 	for _, f := range fieldsToUpdate {
 		if slices.Contains(handledFields, f.Name) {
@@ -310,39 +351,75 @@ func (a *Graph[T]) replace(
 		handledFields = append(handledFields, f.Name)
 		fieldValue := objCopy.FieldByIndex(f.Index)
 		var depsRemovedInIteration types
+		var depsAddedInIteration types
 		if f.Type == type_ {
-			if !fieldValue.IsZero() {
-				elemType := fieldValue.Elem().Type()
-				depsRemovedInIteration = a.getDependencyTypes(elemType)
-				depsRemovedInIteration.append(elemType)
-				if isPointer(elemType) {
-					depsRemovedInIteration.append(elemType.Elem())
-				}
-			}
+			fmt.Printf("Replacing %s (%s)\n", f.Name, printType(objType))
+			depsRemovedInIteration = getFieldDeps(orgDeps, objType, f)
+			depsAddedInIteration = replacedDeps
+			a.setFieldDeps(objType, replacedDeps, f)
+			// if fieldValue.IsZero() {
+			// 	fmt.Println("Zero value")
+			// 	depsRemovedInIteration = a.getFieldDeps(objType, f)
+			// } else {
+			// 	elemType := fieldValue.Elem().Type()
+			// 	depsRemovedInIteration = a.getDependencyTypes(elemType)
+			// 	depsRemovedInIteration.append(elemType)
+			// 	if isPointer(elemType) {
+			// 		depsRemovedInIteration.append(elemType.Elem())
+			// 	}
+			// }
+
+			// fmt.Println("Deps removed", depsRemovedInIteration)
+			// fmt.Println("Deps inserted", replacedDeps)
 			fieldValue.Set(newValue)
 		} else {
 			var v reflect.Value
-			v, depsRemovedInIteration = a.replace(fieldValue, newValue, type_, false, replacedDeps, stack)
+			v, depsRemovedInIteration, depsAddedInIteration = a.replace(fieldValue, newValue, orgDeps, type_, false, replacedDeps, stack)
 			fieldValue.Set(v)
-		}
-		for _, d := range depsRemovedInIteration {
-			depFields := deps[d]
-			idx := slices.IndexFunc(
-				depFields,
-				func(x reflect.StructField) bool { return x.Name == f.Name },
-			)
-			if idx == -1 {
-				panic("Bad field")
+			// fmt.Printf("New deps for %s\n%#v\n", printType(objType), deps)
+			for _, newDep := range replacedDeps {
+				fields := deps[newDep]
+				fields = append(fields, f)
+				deps[newDep] = fields
 			}
-			deps[d] = slices.Delete(depFields, idx, idx+1)
-		}
-		for _, newDep := range replacedDeps {
-			fields := deps[newDep]
-			fields = append(fields, f)
-			deps[newDep] = fields
+			// fmt.Printf("New deps for %s\n%#v\n", printType(objType), deps)
+			// fmt.Println(" REPLACING FIELDS ON: ", printType(objType))
+			// fmt.Println("   NEW ", depsAddedInIteration)
+			// fmt.Println("   REM ", depsRemovedInIteration)
+			for _, d := range depsRemovedInIteration {
+				depFields := deps[d]
+				idx := slices.IndexFunc(
+					depFields,
+					func(x reflect.StructField) bool {
+						// res := reflect.DeepEqual(x, f)
+						res := x.Name == f.Name
+						if res {
+							fmt.Printf(
+								"Remove field %s on %s (%s)\n",
+								f.Name,
+								printType(f.Type),
+								printType(objType),
+							)
+						}
+						return res
+					},
+				)
+				if idx == -1 {
+					panic(
+						fmt.Sprintf(
+							"Bad field: %s (%s) - %#v",
+							f.Name,
+							printType(objType),
+							f,
+						),
+					)
+				}
+				deps[d] = slices.Delete(depFields, idx, idx+1)
+			}
 		}
 
 		depsRemoved = append(depsRemoved, depsRemovedInIteration...)
+		depsAdded = append(depsAdded, depsAddedInIteration...)
 	}
 
 	var result reflect.Value
@@ -354,7 +431,10 @@ func (a *Graph[T]) replace(
 	if i, ok := result.Interface().(Initer); ok {
 		i.Init()
 	}
-	return result, depsRemoved
+	fmt.Println("Done with type:", printType(objType))
+	fmt.Println("  Removed deps", depsRemoved)
+	fmt.Println("  Added deps", depsAdded)
+	return result, depsRemoved, depsAdded
 }
 
 type Initer interface{ Init() }
@@ -452,7 +532,10 @@ func cloneDependencies(d graphDependencies) graphDependencies {
 	res := make(graphDependencies)
 	for k, v := range d {
 		d := make(graphDependency)
-		maps.Copy(d, v)
+		for kk, vv := range v {
+			d[kk] = slices.Clone(vv)
+		}
+		// maps.Copy(d, v)
 		res[k] = d
 	}
 	return res
@@ -467,7 +550,7 @@ func (g *Graph[T]) clone() *Graph[T] {
 	}
 }
 
-func allDepsOfNewInstance(instance any, scopes []Scope) (types, *Graph[any]) {
+func allDepsOfNewInstance(t reflect.Type, instance any, scopes []Scope) (types, *Graph[any]) {
 	injectedType := reflect.TypeOf(instance)
 	depGraph := BuildGraph(instance, scopes...)
 	var allDeps []reflect.Type
@@ -475,6 +558,7 @@ func allDepsOfNewInstance(instance any, scopes []Scope) (types, *Graph[any]) {
 		allDeps = append(allDeps, injectedType)
 		injectedType = injectedType.Elem()
 	}
+	allDeps = append(allDeps, t)
 	for dep, fields := range depGraph.dependencies[injectedType] {
 		deps := make([]reflect.Type, len(fields))
 		for i := range fields {
@@ -496,10 +580,13 @@ func Replace[V any, T any](a *Graph[T], instance V) *Graph[T] {
 		panic("surgeon: Replaced type must be an interface")
 	}
 
-	allDeps, depGraph := allDepsOfNewInstance(instance, a.scopes)
+	allDeps, depGraph := allDepsOfNewInstance(t, instance, a.scopes)
+	fmt.Println("New deps to inject", allDeps)
 
-	replacedInstance, removedTypes := res.replace(
-		reflect.ValueOf(a.instance), reflect.ValueOf(instance), t, true, allDeps, nil)
+	replacedInstance, removedTypes, _ := res.replace(
+		reflect.ValueOf(a.instance), reflect.ValueOf(instance),
+		cloneDependencies(res.dependencies),
+		t, true, allDeps, nil)
 	for res.cleanTypes(removedTypes) {
 	}
 	mergeDeps(res, depGraph)
@@ -550,7 +637,6 @@ func Replace[V any, T any](a *Graph[T], instance V) *Graph[T] {
 // The intended use is building the object graph at application startup. When
 // replacing dependencies in testing, use Replace or ReplaceAll
 func (g *Graph[T]) Inject(instance any) {
-	allDeps, depGraph := allDepsOfNewInstance(instance, g.scopes)
 	t := reflect.TypeOf(instance)
 	var interfaces []reflect.Type
 	for i := range g.interfaces {
@@ -568,9 +654,14 @@ func (g *Graph[T]) Inject(instance any) {
 		)
 	}
 	for _, i := range interfaces {
-		v, removedTypes := g.replace(
+		allDeps, depGraph := allDepsOfNewInstance(i, instance, g.scopes)
+		// if idx > 0 {
+		// 	break
+		// }
+		v, removedTypes, _ := g.replace(
 			reflect.ValueOf(g.instance),
 			reflect.ValueOf(instance),
+			cloneDependencies(g.dependencies),
 			i,
 			true,
 			allDeps,
@@ -579,8 +670,8 @@ func (g *Graph[T]) Inject(instance any) {
 		g.instance = v.Interface().(T)
 		for g.cleanTypes(removedTypes) {
 		}
+		mergeDeps(g, depGraph)
 	}
-	mergeDeps(g, depGraph)
 }
 
 // Replace replaces a single dependency of the graph, and returns a partial
