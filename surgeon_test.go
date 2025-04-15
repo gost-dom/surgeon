@@ -122,7 +122,7 @@ func TestPanicWhenDependencyDoesntExist(t *testing.T) {
 	tree := NewSimpleRoot()
 	assert.PanicsWithValue(
 		t,
-		"surgeon: Cannot replace type Aer. No dependency in the graph",
+		"surgeon: replacing type Aer: no dependency in the graph",
 		func() {
 			a := surgeon.BuildGraph(tree)
 			surgeon.Replace[Aer](a, FakeA{})
@@ -140,7 +140,7 @@ func TestReplaceingBetweenLayersOfInterfaces(t *testing.T) {
 	tree := NewSimpleRoot()
 	assert.PanicsWithValue(
 		t,
-		"surgeon: Cannot replace type Aer. No dependency in the graph",
+		"surgeon: replacing type Aer: no dependency in the graph",
 		func() {
 			a := surgeon.BuildGraph(tree)
 			surgeon.Replace[Aer](a, FakeA{})
@@ -180,7 +180,7 @@ func TestReplaceFirstLayersOfAbstractions(t *testing.T) {
 
 	// There should no longer be an Aer in the graph
 	assert.PanicsWithValue(t,
-		"surgeon: Cannot replace type Aer. No dependency in the graph",
+		"surgeon: replacing type Aer: no dependency in the graph",
 		func() { surgeon.Replace[Aer](graph, RealA{}) })
 }
 
@@ -378,77 +378,6 @@ func TestReplaceDependencyOfEmbeddedInitializable(t *testing.T) {
 
 	assert.Equal(t, 1, clone.initCount, "Init called on root")
 	assert.Equal(t, 0, clone.InitializableWithDep.i.InitCount, "Init called on embed")
-}
-
-func TestInitialize(t *testing.T) {
-	A := &InitializableA{}
-	B := &InitializableB{}
-	C := &InitializableC{}
-	B.Aer = A
-	root := InitializableRoot{
-		A: A,
-		B: B,
-		C: C,
-	}
-	var (
-		rootOrderCheck bool
-		bOrderCheck    bool
-	)
-	root.Callback = func() {
-		rootOrderCheck = A.Initialized() && B.Initialized() && C.Initialized()
-	}
-	B.Initializable.Callback = func() {
-		bOrderCheck = A.Initialized()
-	}
-
-	surgeon.InitGraph(&root)
-
-	// Assert original
-	assert := assert.New(t)
-	assert.Equal(1, root.InitCount)
-	assert.Equal(1, root.A.(*InitializableA).InitCount)
-	assert.Equal(1, root.B.(*InitializableB).InitCount)
-	assert.Equal(1, root.C.(*InitializableC).InitCount)
-
-	assert.True(rootOrderCheck, "Dependencies were initialized before root")
-	assert.True(bOrderCheck, "A initialized before B")
-}
-
-func TestInitializeWithNoPointer(t *testing.T) {
-	var (
-		rootOrderCheck bool
-		bOrderCheck    bool
-	)
-
-	A := &InitializableA{}
-	B := InitializableBNonPointer{}
-	B.Initializable = &Initializable{}
-	C := &InitializableC{}
-	B.Aer = A
-	B.Initializable.Callback = func() {
-		bOrderCheck = A.Initialized()
-	}
-	root := InitializableRoot{
-		A: A,
-		B: B,
-		C: C,
-	}
-	root.Callback = func() {
-		rootOrderCheck = A.Initialized() && root.B.(InitializableBNonPointer).Initialized() &&
-			C.Initialized()
-	}
-
-	surgeon.InitGraph(&root, surgeon.PackagePrefixScope("github.com/gost-dom"))
-
-	// Assert original
-	assert := assert.New(t)
-	assert.Equal(1, root.InitCount)
-	assert.Equal(1, root.A.(*InitializableA).InitCount, "A init count")
-	assert.Equal(1, root.B.(InitializableBNonPointer).InitCount, "B init count")
-	assert.Equal(1, root.C.(*InitializableC).InitCount, "C init count")
-
-	assert.True(rootOrderCheck, "Dependencies were initialized before root")
-	assert.True(bOrderCheck, "A initialized before B")
 }
 
 type RootWithSimplInterfaceDependency struct {

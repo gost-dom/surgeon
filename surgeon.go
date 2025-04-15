@@ -7,8 +7,15 @@ import (
 	"strings"
 )
 
+// A Scope identifies if a visited type in an object graph is in scope for
+// further dependency analysis.
+//
+// Typically you want your own types in scopes, excluding std and 3rd party
+// libraries.
 type Scope interface{ InScope(reflect.Type) bool }
 
+// PackagePrefixScope implements a [Scope] that selects all packages with a
+// specific prefix. The intended use case it to pass the module package name.
 type PackagePrefixScope string
 
 func (s PackagePrefixScope) InScope(t reflect.Type) bool {
@@ -17,23 +24,21 @@ func (s PackagePrefixScope) InScope(t reflect.Type) bool {
 
 // Analyses a configured object. The resulting [Graph] can be used to
 // replace dependencies.
+//
+// The types that will be analysed can be controlled by the scopes. If scopes
+// are used, the visited type must be in scope of all scopes. A typical use case
+// it to specify use the [PackagePrefixScope] to specify the root path of your
+// package.
+//
+//	// Full package path: example.com/package/internal/server
+//
+//	package server
+//
+//	surgeon.BuildGraph(server, PackagePrefixScope("example.com/package"))
 func BuildGraph[T any](instance T, scopes ...Scope) *Graph[T] {
 	result := &Graph[T]{instance: instance, scopes: scopes}
-	result.buildDependencies(false)
+	result.buildDependencies()
 	return result
-}
-
-// Analyses and initialises the configured object. The resulting [Graph] can be used to
-// replace dependencies.
-//
-// The graph is identical to the result of [BuildGraph], but this function
-// implicitly initializes all components in the graph that implements the
-// `Initer` interface
-func InitGraph[T any](instance T, scopes ...Scope) *Graph[T] {
-	result := &Graph[T]{instance: instance, scopes: scopes}
-	result.buildDependencies(true)
-	return result
-
 }
 
 type types []reflect.Type
@@ -66,25 +71,18 @@ type Graph[T any] struct {
 	// type (A) in the second map, which tells which fields in the instance that
 	// has either a direct or indirect dependency to A.
 	dependencies map[reflect.Type]map[reflect.Type][]reflect.StructField
-	initialized  map[reflect.Type]bool
-	initializedV map[reflect.Value]bool
-	interfaces   []reflect.Type
-	ignoreNil    bool
-	scopes       []Scope
+	// interfaces contains a list of known interface types in the dependency
+	// graph.
+	interfaces []reflect.Type
+	// scopes define which types should be analysed in the graph. Generally you
+	// want to add your root scope.
+	scopes []Scope
 }
 
-func (a *Graph[T]) buildDependencies(init bool) {
+func (a *Graph[T]) buildDependencies() {
 	a.dependencies = make(map[reflect.Type]map[reflect.Type][]reflect.StructField)
-	a.initialized = make(map[reflect.Type]bool)
-	a.initializedV = make(map[reflect.Value]bool)
 	v := reflect.ValueOf(a.instance)
-	a.buildTypeDependencies(v, v, init, nil)
-}
-
-func (g *Graph[T]) IgnoreNil() *Graph[T] {
-	clone := g.clone()
-	clone.ignoreNil = true
-	return clone
+	a.buildTypeDependencies(v, v, nil)
 }
 
 func (a *Graph[T]) inScope(t reflect.Type) bool {
@@ -105,12 +103,14 @@ func isInterface(t reflect.Type) bool { return t.Kind() == reflect.Interface }
 // Builds the dependency graph, and potentially initializes objects.
 // - v is object being iterated for the dependency graph
 // - initValue is the value that should be initialized (if enabled).
-// - init indicates of values should be initialized
 // - visitedTypes is for troubleshooting the code only.
+//
+// The result is all types that the value depends on directly or indirectly. The
+// same type can have multiple entries, if a value has multiple paths to that
+// dependency. A likely example would be a database connection pool.
 func (a *Graph[T]) buildTypeDependencies(
 	v reflect.Value,
 	initValue reflect.Value,
-	init bool,
 	visitedTypes []reflect.Type,
 ) types {
 	type_ := v.Type()
@@ -123,7 +123,7 @@ func (a *Graph[T]) buildTypeDependencies(
 			names[i] = t.Name()
 		}
 		names[len(visitedTypes)] = type_.Name()
-		panic("Cyclic dependencies in graph: " + strings.Join(names, ", "))
+		panic("surgeon: cyclic dependencies in graph: " + strings.Join(names, ", "))
 	}
 	visitedTypes = append(visitedTypes, type_)
 
@@ -132,17 +132,17 @@ func (a *Graph[T]) buildTypeDependencies(
 		if !slices.Contains(a.interfaces, type_) {
 			a.interfaces = append(a.interfaces, type_)
 		}
-		if v.IsZero() && !a.ignoreNil {
+		if v.IsZero() {
 			return types{type_}
 			// panic(fmt.Sprintf("surgeon: Value for %s (%s) is nil", type_.Name(), type_.PkgPath()))
 		}
 		fallthrough
 	case reflect.Pointer:
-		if v.IsZero() && !a.ignoreNil {
+		if v.IsZero() {
 			innerType := type_.Elem()
 			panic(
 				fmt.Sprintf(
-					"surgeon: Value for *%s (%s) is nil",
+					"surgeon: nil value for *%s (%s)",
 					innerType.Name(),
 					innerType.PkgPath(),
 				),
@@ -153,11 +153,8 @@ func (a *Graph[T]) buildTypeDependencies(
 		if v != initValue {
 			newInitValue = initValue
 		}
-		tmp := a.buildTypeDependencies(e, newInitValue, init, visitedTypes)
+		tmp := a.buildTypeDependencies(e, newInitValue, visitedTypes)
 		tmp.append(type_)
-		if v == initValue {
-			a.initValue(v, init)
-		}
 		return tmp
 	case reflect.Struct:
 		var dependencies types
@@ -181,7 +178,7 @@ func (a *Graph[T]) buildTypeDependencies(
 			if f.Anonymous {
 				initValue = v
 			}
-			fieldDependencies := a.buildTypeDependencies(fieldValue, initValue, init, visitedTypes)
+			fieldDependencies := a.buildTypeDependencies(fieldValue, initValue, visitedTypes)
 			dependencies.append(fieldDependencies...)
 			for _, depType := range fieldDependencies {
 				typeDependencies[depType] = append(typeDependencies[depType], f)
@@ -189,7 +186,6 @@ func (a *Graph[T]) buildTypeDependencies(
 		}
 		a.dependencies[type_] = typeDependencies
 		dependencies.append(type_)
-		a.initValue(initValue, init)
 		return dependencies
 	}
 	return nil
@@ -200,32 +196,6 @@ func underlyingType(t reflect.Type) reflect.Type {
 		t = t.Elem()
 	}
 	return t
-}
-
-func (g *Graph[T]) initValue(v reflect.Value, init bool) {
-	if init {
-		t := v.Type()
-		if isInterface(t) {
-			// We will initialize the underlying type. Don't init twice
-			return
-		}
-		p := isPointer(t)
-		typeInitialized := g.initialized[v.Type()]
-		valueInitialized := g.initializedV[v]
-		if v.Type().Name() == "InitializableBNonPointer" ||
-			(underlyingType(v.Type()).Name() == "Initializable") ||
-			(isPointer(v.Type()) &&
-				v.Type().Elem().Name() == "InitializableBNonPointer") {
-		}
-		typeInitialized = typeInitialized && p
-		valueInitialized = valueInitialized && !p
-		alreadyInitialized := typeInitialized || valueInitialized
-		if i, ok := v.Interface().(Initer); ok && !alreadyInitialized {
-			i.Init()
-			g.initialized[v.Type()] = true
-			g.initializedV[v] = true
-		}
-	}
 }
 
 func (a *Graph[T]) Instance() T {
@@ -267,7 +237,7 @@ func (a *Graph[T]) replace(
 	if len(fieldsToUpdate) == 0 {
 		if isRoot {
 			msg := fmt.Sprintf(
-				"surgeon: Cannot replace type %s. No dependency in the graph",
+				"surgeon: replacing type %s: no dependency in the graph",
 				type_.Name(),
 			)
 			panic(msg)
@@ -382,10 +352,7 @@ func (g *Graph[T]) clone() *Graph[T] {
 	return &Graph[T]{
 		g.instance,
 		g.dependencies,
-		g.initialized,
-		g.initializedV,
 		g.interfaces,
-		g.ignoreNil,
 		g.scopes,
 	}
 }
@@ -422,7 +389,7 @@ func (g *Graph[T]) Inject(instance any) {
 	if len(interfaces) == 0 {
 		panic(
 			fmt.Sprintf(
-				"surgeon.ReplaceAll: Instance of type %s does not implement an interface in the dependency graph of %s (has this already been replaced in this graph?)",
+				"surgeon: Graph.Inject: Instance of type %s does not implement an interface in the dependency graph of %s (has this already been replaced in this graph?)",
 				t.Name(),
 				reflect.TypeFor[T]().Name(),
 			),
