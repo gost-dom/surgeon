@@ -81,7 +81,7 @@ type Graph[T any] struct {
 	dependencies map[reflect.Type]map[reflect.Type][]reflect.StructField
 	// interfaces contains a list of known interface types in the dependency
 	// graph.
-	interfaces []reflect.Type
+	interfaces map[reflect.Type]struct{}
 	// scopes define which types should be analysed in the graph. Generally you
 	// want to add your root scope.
 	scopes []Scope
@@ -101,13 +101,14 @@ func mergeDeps[T any, U any](dst *Graph[T], src *Graph[U]) {
 			}
 		}
 	}
-	for _, intf := range src.interfaces {
+	for intf := range src.interfaces {
 		dst.registerInterface(intf)
 	}
 }
 
 func (a *Graph[T]) buildDependencies() {
 	a.dependencies = make(map[reflect.Type]map[reflect.Type][]reflect.StructField)
+	a.interfaces = make(map[reflect.Type]struct{})
 	v := reflect.ValueOf(a.instance)
 	a.buildTypeDependencies(v, v, nil)
 }
@@ -124,19 +125,13 @@ func (a *Graph[T]) inScope(t reflect.Type) bool {
 	return false
 }
 
-func isPointer(t reflect.Type) bool   { return t.Kind() == reflect.Pointer }
-func isInterface(t reflect.Type) bool { return t.Kind() == reflect.Interface }
+func isPointer(t reflect.Type) bool { return t.Kind() == reflect.Pointer }
 
 func (g *Graph[T]) registerInterface(intfType reflect.Type) {
-	if !slices.Contains(g.interfaces, intfType) {
-		g.interfaces = append(g.interfaces, intfType)
-	}
+	g.interfaces[intfType] = struct{}{}
 }
 func (g *Graph[T]) removeInterface(intfType reflect.Type) {
-	fmt.Println("Remove interface", intfType.Name())
-	g.interfaces = slices.DeleteFunc(g.interfaces, func(t reflect.Type) bool {
-		return t == intfType
-	})
+	delete(g.interfaces, intfType)
 }
 
 // Builds the dependency graph, and potentially initializes objects.
@@ -447,7 +442,7 @@ func Debug[T any](a *Graph[T]) string {
 		}
 	}
 	b.WriteString("Registered interfaces:\n")
-	for _, t := range a.interfaces {
+	for t := range a.interfaces {
 		b.WriteString(fmt.Sprintf("- %s\n", printType(t)))
 	}
 	return b.String()
@@ -557,7 +552,7 @@ func (g *Graph[T]) Inject(instance any) {
 	allDeps, depGraph := allDepsOfNewInstance(instance, g.scopes)
 	t := reflect.TypeOf(instance)
 	var interfaces []reflect.Type
-	for _, i := range g.interfaces {
+	for i := range g.interfaces {
 		if t.AssignableTo(i) {
 			interfaces = append(interfaces, i)
 		}
