@@ -469,8 +469,12 @@ func (g *Graph[T]) clone() *Graph[T] {
 
 func allDepsOfNewInstance(instance any, scopes []Scope) (types, *Graph[any]) {
 	injectedType := reflect.TypeOf(instance)
+	depGraph := BuildGraph(instance, scopes...)
 	var allDeps []reflect.Type
-	depGraph := BuildGraph[any](instance, scopes...)
+	if isPointer(injectedType) {
+		allDeps = append(allDeps, injectedType)
+		injectedType = injectedType.Elem()
+	}
 	for dep, fields := range depGraph.dependencies[injectedType] {
 		deps := make([]reflect.Type, len(fields))
 		for i := range fields {
@@ -479,9 +483,6 @@ func allDepsOfNewInstance(instance any, scopes []Scope) (types, *Graph[any]) {
 		allDeps = append(allDeps, deps...)
 	}
 	allDeps = append(allDeps, injectedType)
-	if isPointer(injectedType) {
-		allDeps = append(allDeps, injectedType.Elem())
-	}
 	return allDeps, depGraph
 }
 

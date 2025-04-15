@@ -412,6 +412,14 @@ func TestFulfillingADependencyWithANewDependency(t *testing.T) {
 	assert.Equal(t, "B says: Real A", g.Instance().B.B())
 }
 
+func TestFulfillingADependencyWithANewPointerDependency(t *testing.T) {
+	var root = struct{ B Ber }{}
+	g := surgeon.BuildGraph(&root)
+	g = surgeon.Replace[Ber](g, &RealB{})
+	g = surgeon.Replace[Aer](g, RealA{})
+	assert.Equal(t, "B says: Real A", g.Instance().B.B())
+}
+
 func init() {
 	surgeon.DiagnosticsMode = true
 }
