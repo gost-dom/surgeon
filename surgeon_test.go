@@ -408,12 +408,7 @@ func TestDIUpdatesUsedInterfaces(t *testing.T) {
 func TestFulfillingADependencyWithANewDependency(t *testing.T) {
 	var root = struct{ B Ber }{}
 	g := surgeon.BuildGraph(&root)
-	fmt.Println("Part 1\n", surgeon.Debug(g))
 	g = surgeon.Replace[Ber](g, RealB{})
-	fmt.Println("\n\nPart 2\n", surgeon.Debug(g))
-	// dummy := surgeon.BuildGraph(g.Instance())
-	// fmt.Println("\n\nPart 2B\n", surgeon.Debug(dummy))
 	g = surgeon.Replace[Aer](g, RealA{})
-	// fmt.Println("\n\nPart 3\n", surgeon.Debug(g))
 	assert.Equal(t, "B says: Real A", g.Instance().B.B())
 }
