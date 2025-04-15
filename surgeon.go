@@ -2,6 +2,7 @@ package surgeon
 
 import (
 	"fmt"
+	"maps"
 	"reflect"
 	"slices"
 	"strings"
@@ -87,19 +88,20 @@ type Graph[T any] struct {
 }
 
 func mergeDeps[T any, U any](dst *Graph[T], src *Graph[U]) {
-	for k, v := range src.dependencies {
-		if dst2, ok := dst.dependencies[k]; !ok {
-			dst.dependencies[k] = v
-		} else {
-			for k2, v2 := range v {
-				if _, ok := dst2[k2]; ok {
-					dst2[k2] = append(dst2[k2], v2...)
-				} else {
-					dst2[k2] = v2
-				}
-			}
-		}
-	}
+	maps.Copy(dst.dependencies, src.dependencies)
+	// for k, v := range src.dependencies {
+	// 	if dst2, ok := dst.dependencies[k]; !ok {
+	// 		dst.dependencies[k] = v
+	// 	} else {
+	// 		for k2, v2 := range v {
+	// 			if _, ok := dst2[k2]; ok {
+	// 				dst2[k2] = append(dst2[k2], v2...)
+	// 			} else {
+	// 				dst2[k2] = v2
+	// 			}
+	// 		}
+	// 	}
+	// }
 	for intf := range src.interfaces {
 		dst.registerInterface(intf)
 	}
@@ -353,7 +355,7 @@ func (a *Graph[T]) replace(
 		var depsRemovedInIteration types
 		var depsAddedInIteration types
 		if f.Type == type_ {
-			fmt.Printf("Replacing %s (%s)\n", f.Name, printType(objType))
+			// fmt.Printf("Replacing %s (%s)\n", f.Name, printType(objType))
 			depsRemovedInIteration = getFieldDeps(orgDeps, objType, f)
 			depsAddedInIteration = replacedDeps
 			a.setFieldDeps(objType, replacedDeps, f)
@@ -394,12 +396,12 @@ func (a *Graph[T]) replace(
 						// res := reflect.DeepEqual(x, f)
 						res := x.Name == f.Name
 						if res {
-							fmt.Printf(
-								"Remove field %s on %s (%s)\n",
-								f.Name,
-								printType(f.Type),
-								printType(objType),
-							)
+							// fmt.Printf(
+							// 	"Remove field %s on %s (%s)\n",
+							// 	f.Name,
+							// 	printType(f.Type),
+							// 	printType(objType),
+							// )
 						}
 						return res
 					},
@@ -431,9 +433,9 @@ func (a *Graph[T]) replace(
 	if i, ok := result.Interface().(Initer); ok {
 		i.Init()
 	}
-	fmt.Println("Done with type:", printType(objType))
-	fmt.Println("  Removed deps", depsRemoved)
-	fmt.Println("  Added deps", depsAdded)
+	// fmt.Println("Done with type:", printType(objType))
+	// fmt.Println("  Removed deps", depsRemoved)
+	// fmt.Println("  Added deps", depsAdded)
 	return result, depsRemoved, depsAdded
 }
 
@@ -581,7 +583,7 @@ func Replace[V any, T any](a *Graph[T], instance V) *Graph[T] {
 	}
 
 	allDeps, depGraph := allDepsOfNewInstance(t, instance, a.scopes)
-	fmt.Println("New deps to inject", allDeps)
+	// fmt.Println("New deps to inject", allDeps)
 
 	replacedInstance, removedTypes, _ := res.replace(
 		reflect.ValueOf(a.instance), reflect.ValueOf(instance),
