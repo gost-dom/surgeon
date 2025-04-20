@@ -65,9 +65,6 @@ func (t types) String() string {
 	return strings.Join(names, ", ")
 }
 
-type graphDependency = map[reflect.Type][]reflect.StructField
-type graphDependencies = map[reflect.Type]graphDependency
-
 // The Graph is the result of analysing a real object graph.
 type Graph[T any] struct {
 	instance T
@@ -78,7 +75,7 @@ type Graph[T any] struct {
 	// up the instance's type in the first map. Then we lookup the dependency
 	// type (A) in the second map, which tells which fields in the instance that
 	// has either a direct or indirect dependency to A.
-	dependencies map[reflect.Type]map[reflect.Type][]reflect.StructField
+	dependencies graphDependencies
 	// interfaces contains a list of known interface types in the dependency
 	// graph.
 	interfaces map[reflect.Type]struct{}
@@ -88,7 +85,8 @@ type Graph[T any] struct {
 }
 
 func mergeDeps[T any, U any](dst *Graph[T], src *Graph[U]) {
-	maps.Copy(dst.dependencies, src.dependencies)
+	dst.dependencies.merge(src.dependencies)
+	// maps.Copy(dst.dependencies, src.dependencies)
 	// for k, v := range src.dependencies {
 	// 	if dst2, ok := dst.dependencies[k]; !ok {
 	// 		dst.dependencies[k] = v
@@ -108,7 +106,7 @@ func mergeDeps[T any, U any](dst *Graph[T], src *Graph[U]) {
 }
 
 func (a *Graph[T]) buildDependencies() {
-	a.dependencies = make(map[reflect.Type]map[reflect.Type][]reflect.StructField)
+	a.dependencies = newGraphDependencies()
 	a.interfaces = make(map[reflect.Type]struct{})
 	v := reflect.ValueOf(a.instance)
 	a.buildTypeDependencies(v, v, nil)
@@ -187,7 +185,7 @@ func (a *Graph[T]) buildTypeDependencies(
 		return tmp
 	case reflect.Struct:
 		var dependencies types
-		typeDependencies := make(map[reflect.Type][]reflect.StructField)
+		typeDependencies := newGraphDependency()
 		for _, f := range reflect.VisibleFields(type_) {
 			if !f.IsExported() {
 				continue
@@ -210,10 +208,10 @@ func (a *Graph[T]) buildTypeDependencies(
 			fieldDependencies := a.buildTypeDependencies(fieldValue, initValue, visitedTypes)
 			dependencies.append(fieldDependencies...)
 			for _, depType := range fieldDependencies {
-				typeDependencies[depType] = append(typeDependencies[depType], f)
+				typeDependencies.append(depType, f)
 			}
 		}
-		a.dependencies[type_] = typeDependencies
+		a.dependencies.set(type_, typeDependencies)
 		dependencies.append(type_)
 		return dependencies
 	}
@@ -231,20 +229,18 @@ type debugInfo struct {
 func (g *Graph[T]) cleanTypes(types []reflect.Type) (res bool) {
 	for _, t := range types {
 		found := false
-		for _, v := range g.dependencies {
-			v2, f := v[t]
+		for _, v := range g.dependencies.All() {
+			v2 := v.get(t)
 			if len(v2) == 0 {
-				if f {
-					delete(v, t)
-				}
+				v.delete(t)
 			} else {
 				found = true
 			}
 		}
 		if !found {
 			g.removeInterface(t)
-			if g.dependencies[t] != nil {
-				delete(g.dependencies, t)
+			if g.dependencies.get(t) != nil {
+				g.dependencies.delete(t)
 				res = true
 			}
 		}
@@ -255,7 +251,7 @@ func (g *Graph[T]) cleanTypes(types []reflect.Type) (res bool) {
 func getFieldDeps(graph graphDependencies, t reflect.Type, f reflect.StructField) types {
 	var res types
 	// for _, v := range g.dependencies {
-	for tt, ff := range graph[t] {
+	for tt, ff := range graph.get(t).All() {
 		for _, field := range ff {
 			if f.Name == field.Name {
 				res.append(tt)
@@ -268,7 +264,7 @@ func getFieldDeps(graph graphDependencies, t reflect.Type, f reflect.StructField
 func (g *Graph[T]) getFieldDeps(t reflect.Type, f reflect.StructField) types {
 	var res types
 	// for _, v := range g.dependencies {
-	for tt, ff := range g.dependencies[t] {
+	for tt, ff := range g.dependencies.get(t).All() {
 		for _, field := range ff {
 			if f.Name == field.Name {
 				res.append(tt)
@@ -280,15 +276,15 @@ func (g *Graph[T]) getFieldDeps(t reflect.Type, f reflect.StructField) types {
 }
 
 func (a *Graph[T]) setFieldDeps(t reflect.Type, deps types, field reflect.StructField) {
-	oldDeps := a.dependencies[t]
-	for k, v := range oldDeps {
-		oldDeps[k] = slices.DeleteFunc(
+	oldDeps := a.dependencies.get(t)
+	for k, v := range oldDeps.All() {
+		oldDeps.set(k, slices.DeleteFunc(
 			v,
 			func(x reflect.StructField) bool { return x.Name == field.Name },
-		)
+		))
 	}
 	for _, dep := range deps {
-		oldDeps[dep] = append(oldDeps[dep], field)
+		oldDeps.append(dep, field)
 	}
 }
 
@@ -320,8 +316,9 @@ func (a *Graph[T]) replace(
 		objType = graphObj.Type()
 	}
 
-	deps := a.dependencies[objType]
-	fieldsToUpdate := slices.Clone(deps[type_])
+	deps := a.dependencies.get(objType)
+	ts := deps.get(type_)
+	fieldsToUpdate := slices.Clone(ts)
 	if len(fieldsToUpdate) == 0 {
 		if isRoot {
 			msg := fmt.Sprintf(
@@ -383,16 +380,16 @@ func (a *Graph[T]) replace(
 			fieldValue.Set(v)
 			// fmt.Printf("New deps for %s\n%#v\n", printType(objType), deps)
 			for _, newDep := range replacedDeps {
-				fields := deps[newDep]
-				fields = append(fields, f)
-				deps[newDep] = fields
+				// fields, _ := deps.get(newDep)
+				// fields = append(fields, f)
+				deps.append(newDep, f) // ] = fields
 			}
 			// fmt.Printf("New deps for %s\n%#v\n", printType(objType), deps)
 			// fmt.Println(" REPLACING FIELDS ON: ", printType(objType))
 			// fmt.Println("   NEW ", depsAddedInIteration)
 			// fmt.Println("   REM ", depsRemovedInIteration)
 			for _, d := range depsRemovedInIteration {
-				depFields := deps[d]
+				depFields := deps.get(d)
 				idx := slices.IndexFunc(
 					depFields,
 					func(x reflect.StructField) bool {
@@ -419,7 +416,7 @@ func (a *Graph[T]) replace(
 						),
 					)
 				}
-				deps[d] = slices.Delete(depFields, idx, idx+1)
+				deps.set(d, slices.Delete(depFields, idx, idx+1))
 			}
 		}
 
@@ -450,7 +447,7 @@ func (a *Graph[T]) getDependencyTypes(t reflect.Type) types {
 	if isPointer(t) {
 		t = t.Elem()
 	}
-	for k, v := range a.dependencies[t] {
+	for k, v := range a.dependencies.get(t).All() {
 		for range v {
 			res = append(res, k)
 		}
@@ -482,34 +479,15 @@ func iterateStringMapSorted[T any](types map[string]T) []kv[string, T] {
 	}
 	return res
 }
-func iterateTypesSorted[T any](types map[reflect.Type]T) []kv[reflect.Type, T] {
-	keys := make([]reflect.Type, 0, len(types))
-	for k := range types {
-		keys = append(keys, k)
-	}
-	slices.SortFunc(
-		keys,
-		func(x, y reflect.Type) int { return strings.Compare(printType(x), printType(y)) },
-	)
-	res := make([]kv[reflect.Type, T], len(keys))
-	for i, k := range keys {
-		res[i] = kv[reflect.Type, T]{k, types[k]}
-	}
-	return res
-}
 
 func Debug[T any](a *Graph[T]) string {
 	var b strings.Builder
 	b.WriteString("Registered types:\n")
-	for _, kv := range iterateTypesSorted(a.dependencies) {
-		k := kv.k
-		v := kv.v
+	for k, v := range a.dependencies.AllSorted() {
 		fieldToDeps := make(map[string][]reflect.Type)
 		b.WriteString(fmt.Sprintf(" - %s\n", k.Name()))
 		b.WriteString("    By dependency\n")
-		for _, kv2 := range iterateTypesSorted(v) {
-			k2 := kv2.k
-			f := kv2.v
+		for k2, f := range v.AllSorted() {
 			b.WriteString(fmt.Sprintf("     - %s (count: %d)\n", printType(k2), len(f)))
 			for _, d := range f {
 				n := d.Name
@@ -534,16 +512,7 @@ func Debug[T any](a *Graph[T]) string {
 }
 
 func cloneDependencies(d graphDependencies) graphDependencies {
-	res := make(graphDependencies)
-	for k, v := range d {
-		d := make(graphDependency)
-		for kk, vv := range v {
-			d[kk] = slices.Clone(vv)
-		}
-		// maps.Copy(d, v)
-		res[k] = d
-	}
-	return res
+	return d.clone()
 }
 
 func (g *Graph[T]) clone() *Graph[T] {
@@ -564,7 +533,7 @@ func allDepsOfNewInstance(t reflect.Type, instance any, scopes []Scope) (types, 
 		injectedType = injectedType.Elem()
 	}
 	allDeps = append(allDeps, t)
-	for dep, fields := range depGraph.dependencies[injectedType] {
+	for dep, fields := range depGraph.dependencies.get(injectedType).All() {
 		deps := make([]reflect.Type, len(fields))
 		for i := range fields {
 			deps[i] = dep
