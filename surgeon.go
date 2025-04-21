@@ -261,19 +261,6 @@ func getFieldDeps(graph graphDependencies, t reflect.Type, f reflect.StructField
 	// }
 	return res
 }
-func (g *Graph[T]) getFieldDeps(t reflect.Type, f reflect.StructField) types {
-	var res types
-	// for _, v := range g.dependencies {
-	for tt, ff := range g.dependencies.get(t).All() {
-		for _, field := range ff {
-			if f.Name == field.Name {
-				res.append(tt)
-			}
-		}
-	}
-	// }
-	return res
-}
 
 func (a *Graph[T]) setFieldDeps(t reflect.Type, deps types, field reflect.StructField) {
 	oldDeps := a.dependencies.get(t)
@@ -441,20 +428,6 @@ func (a *Graph[T]) replace(
 
 type Initer interface{ Init() }
 
-func (a *Graph[T]) getDependencyTypes(t reflect.Type) types {
-	var res types
-	// pointer type dependencies are not registered
-	if isPointer(t) {
-		t = t.Elem()
-	}
-	for k, v := range a.dependencies.get(t).All() {
-		for range v {
-			res = append(res, k)
-		}
-	}
-	return res
-}
-
 func printType(t reflect.Type) string {
 	if isPointer(t) {
 		return "*" + printType(t.Elem())
@@ -511,14 +484,10 @@ func Debug[T any](a *Graph[T]) string {
 	return b.String()
 }
 
-func cloneDependencies(d graphDependencies) graphDependencies {
-	return d.clone()
-}
-
 func (g *Graph[T]) clone() *Graph[T] {
 	return &Graph[T]{
 		g.instance,
-		cloneDependencies(g.dependencies),
+		g.dependencies.clone(),
 		maps.Clone(g.interfaces),
 		g.scopes,
 	}
@@ -559,7 +528,7 @@ func Replace[V any, T any](a *Graph[T], instance V) *Graph[T] {
 
 	replacedInstance, removedTypes, _ := res.replace(
 		reflect.ValueOf(a.instance), reflect.ValueOf(instance),
-		cloneDependencies(res.dependencies),
+		res.dependencies.clone(),
 		t, true, allDeps, nil)
 	for res.cleanTypes(removedTypes) {
 	}
@@ -635,7 +604,7 @@ func (g *Graph[T]) Inject(instance any) {
 		v, removedTypes, _ := g.replace(
 			reflect.ValueOf(g.instance),
 			reflect.ValueOf(instance),
-			cloneDependencies(g.dependencies),
+			g.dependencies.clone(),
 			i,
 			true,
 			allDeps,
