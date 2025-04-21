@@ -86,20 +86,6 @@ type Graph[T any] struct {
 
 func mergeDeps[T any, U any](dst *Graph[T], src *Graph[U]) {
 	dst.dependencies.merge(src.dependencies)
-	// maps.Copy(dst.dependencies, src.dependencies)
-	// for k, v := range src.dependencies {
-	// 	if dst2, ok := dst.dependencies[k]; !ok {
-	// 		dst.dependencies[k] = v
-	// 	} else {
-	// 		for k2, v2 := range v {
-	// 			if _, ok := dst2[k2]; ok {
-	// 				dst2[k2] = append(dst2[k2], v2...)
-	// 			} else {
-	// 				dst2[k2] = v2
-	// 			}
-	// 		}
-	// 	}
-	// }
 	for intf := range src.interfaces {
 		dst.registerInterface(intf)
 	}
@@ -131,7 +117,6 @@ func (g *Graph[T]) registerInterface(intfType reflect.Type) {
 }
 func (g *Graph[T]) removeInterface(intfType reflect.Type) {
 	if _, found := g.interfaces[intfType]; found {
-		fmt.Println("Remove interface: ", printType(intfType))
 		delete(g.interfaces, intfType)
 	}
 }
@@ -250,7 +235,6 @@ func (g *Graph[T]) cleanTypes(types []reflect.Type) (res bool) {
 
 func getFieldDeps(graph graphDependencies, t reflect.Type, f reflect.StructField) types {
 	var res types
-	// for _, v := range g.dependencies {
 	for tt, ff := range graph.get(t).All() {
 		for _, field := range ff {
 			if f.Name == field.Name {
@@ -258,7 +242,6 @@ func getFieldDeps(graph graphDependencies, t reflect.Type, f reflect.StructField
 			}
 		}
 	}
-	// }
 	return res
 }
 
@@ -342,56 +325,22 @@ func (a *Graph[T]) replace(
 		var depsRemovedInIteration types
 		var depsAddedInIteration types
 		if f.Type == type_ {
-			// fmt.Printf("Replacing %s (%s)\n", f.Name, printType(objType))
 			depsRemovedInIteration = getFieldDeps(orgDeps, objType, f)
 			depsAddedInIteration = replacedDeps
 			a.setFieldDeps(objType, replacedDeps, f)
-			// if fieldValue.IsZero() {
-			// 	fmt.Println("Zero value")
-			// 	depsRemovedInIteration = a.getFieldDeps(objType, f)
-			// } else {
-			// 	elemType := fieldValue.Elem().Type()
-			// 	depsRemovedInIteration = a.getDependencyTypes(elemType)
-			// 	depsRemovedInIteration.append(elemType)
-			// 	if isPointer(elemType) {
-			// 		depsRemovedInIteration.append(elemType.Elem())
-			// 	}
-			// }
-
-			// fmt.Println("Deps removed", depsRemovedInIteration)
-			// fmt.Println("Deps inserted", replacedDeps)
 			fieldValue.Set(newValue)
 		} else {
 			var v reflect.Value
 			v, depsRemovedInIteration, depsAddedInIteration = a.replace(fieldValue, newValue, orgDeps, type_, false, replacedDeps, stack)
 			fieldValue.Set(v)
-			// fmt.Printf("New deps for %s\n%#v\n", printType(objType), deps)
 			for _, newDep := range replacedDeps {
-				// fields, _ := deps.get(newDep)
-				// fields = append(fields, f)
-				deps.append(newDep, f) // ] = fields
+				deps.append(newDep, f)
 			}
-			// fmt.Printf("New deps for %s\n%#v\n", printType(objType), deps)
-			// fmt.Println(" REPLACING FIELDS ON: ", printType(objType))
-			// fmt.Println("   NEW ", depsAddedInIteration)
-			// fmt.Println("   REM ", depsRemovedInIteration)
 			for _, d := range depsRemovedInIteration {
 				depFields := deps.get(d)
 				idx := slices.IndexFunc(
 					depFields,
-					func(x reflect.StructField) bool {
-						// res := reflect.DeepEqual(x, f)
-						res := x.Name == f.Name
-						if res {
-							// fmt.Printf(
-							// 	"Remove field %s on %s (%s)\n",
-							// 	f.Name,
-							// 	printType(f.Type),
-							// 	printType(objType),
-							// )
-						}
-						return res
-					},
+					func(x reflect.StructField) bool { return x.Name == f.Name },
 				)
 				if idx == -1 {
 					panic(
@@ -420,9 +369,6 @@ func (a *Graph[T]) replace(
 	if i, ok := result.Interface().(Initer); ok {
 		i.Init()
 	}
-	// fmt.Println("Done with type:", printType(objType))
-	// fmt.Println("  Removed deps", depsRemoved)
-	// fmt.Println("  Added deps", depsAdded)
 	return result, depsRemoved, depsAdded
 }
 
@@ -598,9 +544,6 @@ func (g *Graph[T]) Inject(instance any) {
 	}
 	for _, i := range interfaces {
 		allDeps, depGraph := allDepsOfNewInstance(i, instance, g.scopes)
-		// if idx > 0 {
-		// 	break
-		// }
 		v, removedTypes, _ := g.replace(
 			reflect.ValueOf(g.instance),
 			reflect.ValueOf(instance),
