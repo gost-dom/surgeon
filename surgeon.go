@@ -591,13 +591,16 @@ func (e IncompleteGraphError) Error() string {
 	return fmt.Sprintf("uninitialized field: %s - type: %s", e.f.Name, e.str.Name())
 }
 
-func validateInstance(v reflect.Value) []error {
+func (g *Graph[T]) validate(v reflect.Value) []error {
 	t := v.Type()
+	if !g.inScope(t) {
+		return nil
+	}
 	switch t.Kind() {
 	case reflect.Interface:
 		return nil
 	case reflect.Pointer:
-		return validateInstance(v.Elem())
+		return g.validate(v.Elem())
 	case reflect.Struct:
 	default:
 		return nil
@@ -608,6 +611,9 @@ func validateInstance(v reflect.Value) []error {
 	for i := range t.NumField() {
 		f := t.Field(i)
 		fv := v.Field(i)
+		if !g.inScope(f.Type) {
+			continue
+		}
 		switch f.Type.Kind() {
 		case reflect.Interface:
 			if fv.IsZero() {
@@ -623,11 +629,11 @@ func validateInstance(v reflect.Value) []error {
 					f:   f,
 				})
 			} else {
-				e := validateInstance(fv.Elem())
+				e := g.validate(fv.Elem())
 				errs = append(errs, e...)
 			}
 		case reflect.Struct:
-			e := validateInstance(fv)
+			e := g.validate(fv)
 			errs = append(errs, e...)
 		}
 
@@ -649,8 +655,8 @@ func validateInstance(v reflect.Value) []error {
 // Please submit an issue if you have this use case (the solution would be to
 // identify an interface where an object in the graph can tell if it's valid or
 // not, and non-vil values is reduced to the _default_ behaviour)
-func (a *Graph[T]) Validate() error {
-	return errors.Join(validateInstance(reflect.ValueOf(a.instance))...)
+func (g *Graph[T]) Validate() error {
+	return errors.Join(g.validate(reflect.ValueOf(g.instance))...)
 }
 
 func ReplaceAll[T any](a *Graph[T], instance any) (res *Graph[T]) {

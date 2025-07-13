@@ -13,7 +13,6 @@ package surgeon_test
 import (
 	"bytes"
 	"encoding/gob"
-	"fmt"
 	"net/http"
 	"reflect"
 	"testing"
@@ -446,10 +445,15 @@ func TestValidate(t *testing.T) {
 	// Cannot test nil pointers, as the graph disallows nil values for now.
 	var root = ValidateTest{&RealA{}, RealB{}}
 	g := surgeon.BuildGraph(&root)
-	fmt.Println("V", root.B.Aer)
 	assert.Error(t, g.Validate(), "The graph was expected to be invalid")
 
 	g = surgeon.Replace[Aer](g, RealA{})
+	assert.NoError(t, g.Validate())
+}
+
+func TestValidateScopes(t *testing.T) {
+	root := &struct{ Routes http.ServeMux }{}
+	g := surgeon.BuildGraph(&root, surgeon.PackagePrefixScope("github.com/gost-dom"))
 	assert.NoError(t, g.Validate())
 }
 
