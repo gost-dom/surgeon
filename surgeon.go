@@ -593,7 +593,6 @@ func (e IncompleteGraphError) Error() string {
 
 func validateInstance(v reflect.Value) []error {
 	t := v.Type()
-	fmt.Println("Validate", printType(t))
 	switch t.Kind() {
 	case reflect.Interface:
 		return nil
@@ -609,7 +608,6 @@ func validateInstance(v reflect.Value) []error {
 	for i := range t.NumField() {
 		f := t.Field(i)
 		fv := v.Field(i)
-		fmt.Println("  Field", f.Name, fv)
 		switch f.Type.Kind() {
 		case reflect.Interface:
 			if fv.IsZero() {
