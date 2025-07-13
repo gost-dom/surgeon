@@ -610,20 +610,16 @@ func (g *Graph[T]) validate(v reflect.Value) []error {
 	errs := make([]error, 0, n)
 	for i := range t.NumField() {
 		f := t.Field(i)
-		fv := v.Field(i)
-		if !g.inScope(f.Type) {
+
+		valid := f.IsExported() && g.inScope(f.Type)
+		if !valid {
 			continue
 		}
+
+		fv := v.Field(i)
 		switch f.Type.Kind() {
-		case reflect.Interface:
+		case reflect.Interface, reflect.Pointer:
 			if fv.IsZero() {
-				errs = append(errs, IncompleteGraphError{
-					str: t,
-					f:   f,
-				})
-			}
-		case reflect.Pointer:
-			if fv.IsNil() {
 				errs = append(errs, IncompleteGraphError{
 					str: t,
 					f:   f,
