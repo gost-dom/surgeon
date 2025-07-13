@@ -1,6 +1,7 @@
 package surgeon
 
 import (
+	"errors"
 	"fmt"
 	"maps"
 	"reflect"
@@ -41,8 +42,16 @@ var DiagnosticsMode bool
 //
 //	surgeon.BuildGraph(server, PackagePrefixScope("example.com/package"))
 func BuildGraph[T any](instance T, scopes ...Scope) *Graph[T] {
-	result := &Graph[T]{instance: instance, scopes: scopes}
-	result.buildDependencies()
+	result := &Graph[T]{
+		instance:     instance,
+		scopes:       scopes,
+		dependencies: newGraphDependencies(),
+		interfaces:   make(map[reflect.Type]struct{}),
+	}
+
+	v := reflect.ValueOf(result.instance)
+	result.buildTypeDependencies(v, v, nil, true)
+
 	return result
 }
 
@@ -91,13 +100,6 @@ func mergeDeps[T any, U any](dst *Graph[T], src *Graph[U]) {
 	}
 }
 
-func (a *Graph[T]) buildDependencies() {
-	a.dependencies = newGraphDependencies()
-	a.interfaces = make(map[reflect.Type]struct{})
-	v := reflect.ValueOf(a.instance)
-	a.buildTypeDependencies(v, v, nil)
-}
-
 func (a *Graph[T]) inScope(t reflect.Type) bool {
 	if len(a.scopes) == 0 {
 		return true
@@ -133,6 +135,7 @@ func (a *Graph[T]) buildTypeDependencies(
 	v reflect.Value,
 	initValue reflect.Value,
 	visitedTypes []reflect.Type,
+	allowNil bool,
 ) types {
 	type_ := v.Type()
 	if !a.inScope(type_) && !isPointer(type_) {
@@ -152,8 +155,10 @@ func (a *Graph[T]) buildTypeDependencies(
 	case reflect.Interface:
 		a.registerInterface(type_)
 		if v.IsZero() {
-			return types{type_}
-			// panic(fmt.Sprintf("surgeon: Value for %s (%s) is nil", type_.Name(), type_.PkgPath()))
+			if allowNil {
+				return types{type_}
+			}
+			panic(fmt.Sprintf("surgeon: Value for %s (%s) is nil", type_.Name(), type_.PkgPath()))
 		}
 		fallthrough
 	case reflect.Pointer:
@@ -165,7 +170,7 @@ func (a *Graph[T]) buildTypeDependencies(
 		if v != initValue {
 			newInitValue = initValue
 		}
-		tmp := a.buildTypeDependencies(e, newInitValue, visitedTypes)
+		tmp := a.buildTypeDependencies(e, newInitValue, visitedTypes, allowNil)
 		tmp.append(type_)
 		return tmp
 	case reflect.Struct:
@@ -190,7 +195,12 @@ func (a *Graph[T]) buildTypeDependencies(
 			if f.Anonymous {
 				initValue = v
 			}
-			fieldDependencies := a.buildTypeDependencies(fieldValue, initValue, visitedTypes)
+			fieldDependencies := a.buildTypeDependencies(
+				fieldValue,
+				initValue,
+				visitedTypes,
+				allowNil,
+			)
 			dependencies.append(fieldDependencies...)
 			for _, depType := range fieldDependencies {
 				typeDependencies.append(depType, f)
@@ -570,6 +580,79 @@ func (g *Graph[T]) ReplaceAll(instance any) *Graph[T] {
 	res := g.clone()
 	res.Inject(instance)
 	return res
+}
+
+type IncompleteGraphError struct {
+	str reflect.Type
+	f   reflect.StructField
+}
+
+func (e IncompleteGraphError) Error() string {
+	return fmt.Sprintf("uninitialized field: %s - type: %s", e.f.Name, e.str.Name())
+}
+
+func validateInstance(v reflect.Value) []error {
+	t := v.Type()
+	fmt.Println("Validate", printType(t))
+	switch t.Kind() {
+	case reflect.Interface:
+		return nil
+	case reflect.Pointer:
+		return validateInstance(v.Elem())
+	case reflect.Struct:
+	default:
+		return nil
+	}
+
+	n := t.NumField()
+	errs := make([]error, 0, n)
+	for i := range t.NumField() {
+		f := t.Field(i)
+		fv := v.Field(i)
+		fmt.Println("  Field", f.Name, fv)
+		switch f.Type.Kind() {
+		case reflect.Interface:
+			if fv.IsZero() {
+				errs = append(errs, IncompleteGraphError{
+					str: t,
+					f:   f,
+				})
+			}
+		case reflect.Pointer:
+			if fv.IsNil() {
+				errs = append(errs, IncompleteGraphError{
+					str: t,
+					f:   f,
+				})
+			} else {
+				e := validateInstance(fv.Elem())
+				errs = append(errs, e...)
+			}
+		case reflect.Struct:
+			e := validateInstance(fv)
+			errs = append(errs, e...)
+		}
+
+	}
+	return errs
+}
+
+// Validate checks that the graph is fully initialized.
+//
+// The intended use case is that the graph itself consists of objects that are
+// not modified during the lifetime of the application, so the assumption is
+// that values should not be nil. As such, any nil pointer or interface will
+// result in an invalid graph.
+//
+// There is a reasonable use case for nil values, when part of the graph is used
+// in different executables, e.g., a web server and CLI for the same application
+// may reuse parts of the graph, but
+//
+// Please submit an issue if you have this use case (the solution would be to
+// identify an interface where an object in the graph can tell if it's valid or
+// not, and non-vil values is reduced to the _default_ behaviour)
+func (a *Graph[T]) Validate() error {
+	return errors.Join(validateInstance(reflect.ValueOf(a.instance))...)
 }
 
 func ReplaceAll[T any](a *Graph[T], instance any) (res *Graph[T]) {

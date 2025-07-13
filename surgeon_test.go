@@ -13,6 +13,7 @@ package surgeon_test
 import (
 	"bytes"
 	"encoding/gob"
+	"fmt"
 	"net/http"
 	"reflect"
 	"testing"
@@ -434,6 +435,22 @@ func TestFulfillingADependencyWithMultiplePaths(t *testing.T) {
 	g = surgeon.Replace[Aer](g, RealA{})
 	assert.Equal(t, "B says: Real A", g.Instance().X.B.B())
 	assert.Equal(t, "B says: Real A", g.Instance().Y.B.B())
+}
+
+type ValidateTest struct {
+	A *RealA
+	B RealB
+}
+
+func TestValidate(t *testing.T) {
+	// Cannot test nil pointers, as the graph disallows nil values for now.
+	var root = ValidateTest{&RealA{}, RealB{}}
+	g := surgeon.BuildGraph(&root)
+	fmt.Println("V", root.B.Aer)
+	assert.Error(t, g.Validate(), "The graph was expected to be invalid")
+
+	g = surgeon.Replace[Aer](g, RealA{})
+	assert.NoError(t, g.Validate())
 }
 
 func init() {
