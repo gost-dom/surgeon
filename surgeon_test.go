@@ -470,3 +470,46 @@ func TestValidateScopes(t *testing.T) {
 func init() {
 	surgeon.DiagnosticsMode = true
 }
+
+type PointerToRealARoot struct {
+	A *RealA
+}
+
+type PointerToMultipleIdenticalPointers struct {
+	First  *RealA
+	Second *RealA
+}
+
+func TestPointerValues(t *testing.T) {
+	if !t.Run("Root with single pointer value", func(t *testing.T) {
+		var root PointerToRealARoot
+		surgeon.BuildGraph(&root)
+		assert.NotNil(t, root.A)
+	}) {
+		return
+	}
+
+	t.Run("Root with multiple pointer values to same type", func(t *testing.T) {
+		var root = &PointerToMultipleIdenticalPointers{}
+		surgeon.BuildGraph(&root)
+		assert.NotNil(t, root.First, "First was assigned")
+		assert.NotNil(t, root.Second, "Second was assigned")
+		assert.Same(t, root.First, root.Second, "Two pointers were assigned same value")
+	})
+
+	t.Run("Pointer to out-of-scope type will not be initialized", func(t *testing.T) {
+		var root struct {
+			A      *RealA
+			Router *http.ServeMux
+		}
+		surgeon.BuildGraph(&root, OutOfHTTPScope{})
+		assert.NotNil(t, root.A, "In-scope value should not be nil")
+		assert.Nil(t, root.Router, "Out-of-scope value should be nil")
+	})
+}
+
+type OutOfHTTPScope struct{}
+
+func (_ OutOfHTTPScope) InScope(t reflect.Type) bool {
+	return t.PkgPath() != "net/http"
+}

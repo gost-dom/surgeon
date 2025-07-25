@@ -50,9 +50,44 @@ func BuildGraph[T any](instance T, scopes ...Scope) *Graph[T] {
 	}
 
 	v := reflect.ValueOf(result.instance)
-	result.buildTypeDependencies(v, v, nil, true)
+	result.buildTypeDependencies(v, initializePointerStrategy{}, v, nil, true)
 
 	return result
+}
+
+// builderStrategy controls how some dependencies are build.
+//
+// The first iteration did not attempt to build the root dependency graph, only
+// replace dependencies for tests. It worked from the assumption that nil
+// pointer values were an invalid value.
+//
+// As it was realised that the library could be used to build the real production
+// runtime graph, a different strategy was adopted, to initialize nil pointer
+// values to zero.
+//
+// The [defaultBuilderStrategy] represents the original use case, but is not
+// used in the code. It is not certain both use cases have any value going
+// forward, but allowing client to have control over how the graph is traversed
+// does seem to make sense, to the idea of a strategy is kept in code, even if
+// not visible to client code.
+type builderStrategy interface {
+	nilPointer(v reflect.Value)
+}
+
+type defaultBuilderStrategy struct{}
+
+func (s defaultBuilderStrategy) nilPointer(v reflect.Value) {
+	type_ := v.Type()
+	panic(fmt.Sprintf("surgeon: nil value: %s", printType(type_)))
+}
+
+type initializePointerStrategy struct {
+}
+
+func (initializePointerStrategy) nilPointer(v reflect.Value) {
+	type_ := v.Type()
+	fmt.Println("Create ", printType(type_))
+	v.Set(reflect.New(type_.Elem()))
 }
 
 type types []reflect.Type
@@ -104,6 +139,10 @@ func (a *Graph[T]) inScope(t reflect.Type) bool {
 	if len(a.scopes) == 0 {
 		return true
 	}
+	if t.Kind() == reflect.Pointer {
+		// If the type is a pointer, check if the type pointed to is in scope.
+		t = t.Elem()
+	}
 	for _, s := range a.scopes {
 		if s.InScope(t) {
 			return true
@@ -118,9 +157,7 @@ func (g *Graph[T]) registerInterface(intfType reflect.Type) {
 	g.interfaces[intfType] = struct{}{}
 }
 func (g *Graph[T]) removeInterface(intfType reflect.Type) {
-	if _, found := g.interfaces[intfType]; found {
-		delete(g.interfaces, intfType)
-	}
+	delete(g.interfaces, intfType)
 }
 
 // Builds the dependency graph, and potentially initializes objects.
@@ -133,12 +170,13 @@ func (g *Graph[T]) removeInterface(intfType reflect.Type) {
 // dependency. A likely example would be a database connection pool.
 func (a *Graph[T]) buildTypeDependencies(
 	v reflect.Value,
+	s builderStrategy,
 	initValue reflect.Value,
 	visitedTypes []reflect.Type,
 	allowNil bool,
 ) types {
 	type_ := v.Type()
-	if !a.inScope(type_) && !isPointer(type_) {
+	if !a.inScope(type_) {
 		return nil
 	}
 	if slices.Contains(visitedTypes, type_) {
@@ -163,14 +201,14 @@ func (a *Graph[T]) buildTypeDependencies(
 		fallthrough
 	case reflect.Pointer:
 		if v.IsZero() {
-			panic(fmt.Sprintf("surgeon: nil value: %s", printType(type_)))
+			s.nilPointer(v)
 		}
 		e := v.Elem()
 		newInitValue := e
 		if v != initValue {
 			newInitValue = initValue
 		}
-		tmp := a.buildTypeDependencies(e, newInitValue, visitedTypes, allowNil)
+		tmp := a.buildTypeDependencies(e, s, newInitValue, visitedTypes, allowNil)
 		tmp.append(type_)
 		return tmp
 	case reflect.Struct:
@@ -197,6 +235,7 @@ func (a *Graph[T]) buildTypeDependencies(
 			}
 			fieldDependencies := a.buildTypeDependencies(
 				fieldValue,
+				s,
 				initValue,
 				visitedTypes,
 				allowNil,
@@ -382,6 +421,15 @@ func (a *Graph[T]) replace(
 	return result, depsRemoved, depsAdded
 }
 
+// Initer is the interface for an Init() function. A type in the dependency
+// graph that implement interface Initer will have its Init function called when
+// cloned.
+//
+// A use case is when replacing a "use case" that a router/ServeMux calls. When cloning
+// the type with the router, the router will still be configured to call methods
+// on the source instance; not the new clone. The Init function should create a
+// new router/ServeMux, setting up the routes, pointing to methods on the new
+// cloned instance.
 type Initer interface{ Init() }
 
 func printType(t reflect.Type) string {
@@ -611,7 +659,7 @@ func (g *Graph[T]) validate(v reflect.Value) []error {
 	for i := range t.NumField() {
 		f := t.Field(i)
 
-		valid := f.IsExported() && g.inScope(f.Type)
+		valid := g.inScope(f.Type)
 		if !valid {
 			continue
 		}
