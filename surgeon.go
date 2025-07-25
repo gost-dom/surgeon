@@ -658,6 +658,9 @@ func (g *Graph[T]) validate(v reflect.Value) []error {
 	errs := make([]error, 0, n)
 	for i := range t.NumField() {
 		f := t.Field(i)
+		if !f.IsExported() {
+			continue
+		}
 
 		valid := g.inScope(f.Type)
 		if !valid {
