@@ -50,7 +50,7 @@ func BuildGraph[T any](instance T, scopes ...Scope) *Graph[T] {
 	}
 
 	v := reflect.ValueOf(result.instance)
-	result.buildTypeDependencies(v, initializePointerStrategy[T]{result}, v, nil, true)
+	result.buildTypeDependencies(v, initializePointerStrategy[T]{result}, v, nil)
 
 	return result
 }
@@ -97,7 +97,7 @@ func (i initializePointerStrategy[T]) nilPointer(v reflect.Value,
 	// if v != initValue {
 	// 	newInitValue = initValue
 	// }
-	tmp := i.graph.buildTypeDependencies(e, i, newInitValue, visitedTypes, true)
+	tmp := i.graph.buildTypeDependencies(e, i, newInitValue, visitedTypes)
 	tmp.append(type_)
 
 	if i, ok := v.Interface().(Initer); ok {
@@ -189,7 +189,6 @@ func (a *Graph[T]) buildTypeDependencies(
 	s builderStrategy,
 	initValue reflect.Value,
 	visitedTypes []reflect.Type,
-	allowNil bool,
 ) types {
 	type_ := v.Type()
 	if !a.inScope(type_) {
@@ -209,10 +208,7 @@ func (a *Graph[T]) buildTypeDependencies(
 	case reflect.Interface:
 		a.registerInterface(type_)
 		if v.IsZero() {
-			if allowNil {
-				return types{type_}
-			}
-			panic(fmt.Sprintf("surgeon: Value for %s (%s) is nil", type_.Name(), type_.PkgPath()))
+			return types{type_}
 		}
 		fallthrough
 	case reflect.Pointer:
@@ -224,17 +220,15 @@ func (a *Graph[T]) buildTypeDependencies(
 		if v != initValue {
 			newInitValue = initValue
 		}
-		tmp := a.buildTypeDependencies(e, s, newInitValue, visitedTypes, allowNil)
+		tmp := a.buildTypeDependencies(e, s, newInitValue, visitedTypes)
 		tmp.append(type_)
 		return tmp
 	case reflect.Struct:
 		var dependencies types
 		typeDependencies := newGraphDependency()
-		for _, f := range reflect.VisibleFields(type_) {
+		for i := range type_.NumField() {
+			f := type_.Field(i)
 			if !f.IsExported() {
-				continue
-			}
-			if len(f.Index) > 1 {
 				continue
 			}
 			fieldValue := v.FieldByIndex(f.Index)
@@ -254,7 +248,6 @@ func (a *Graph[T]) buildTypeDependencies(
 				s,
 				initValue,
 				visitedTypes,
-				allowNil,
 			)
 			dependencies.append(fieldDependencies...)
 			for _, depType := range fieldDependencies {
@@ -672,7 +665,7 @@ func (g *Graph[T]) validate(v reflect.Value) []error {
 
 	n := t.NumField()
 	errs := make([]error, 0, n)
-	for i := range t.NumField() {
+	for i := range n {
 		f := t.Field(i)
 		if !f.IsExported() {
 			continue
