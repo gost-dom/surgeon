@@ -13,6 +13,7 @@ package surgeon_test
 import (
 	"bytes"
 	"encoding/gob"
+	"fmt"
 	"net/http"
 	"reflect"
 	"testing"
@@ -506,6 +507,37 @@ func TestPointerValues(t *testing.T) {
 		assert.NotNil(t, root.A, "In-scope value should not be nil")
 		assert.Nil(t, root.Router, "Out-of-scope value should be nil")
 	})
+
+	t.Run("Pointer to initializable initializes depth first", func(t *testing.T) {
+		var root struct {
+			Child *HierarchicalInitializable
+		}
+		surgeon.BuildGraph(&root)
+		assert.NotNil(t, root.Child)
+		assert.True(t, root.Child.Initialized)
+	})
+}
+
+type HierarchicalInitializable struct {
+	Nested      *Initializable
+	Initialized bool
+}
+
+func (i *HierarchicalInitializable) Init() {
+	if i.Nested == nil {
+		panic("Nested instance not created")
+	}
+	count := i.Nested.InitCount
+
+	if count != 1 {
+		panic(
+			fmt.Sprintf(
+				"Expected nested initializable to have been called _exactly_ once. Actual: %d",
+				count,
+			),
+		)
+	}
+	i.Initialized = true
 }
 
 type OutOfHTTPScope struct{}

@@ -50,7 +50,7 @@ func BuildGraph[T any](instance T, scopes ...Scope) *Graph[T] {
 	}
 
 	v := reflect.ValueOf(result.instance)
-	result.buildTypeDependencies(v, initializePointerStrategy{}, v, nil, true)
+	result.buildTypeDependencies(v, initializePointerStrategy[T]{result}, v, nil, true)
 
 	return result
 }
@@ -71,23 +71,39 @@ func BuildGraph[T any](instance T, scopes ...Scope) *Graph[T] {
 // does seem to make sense, to the idea of a strategy is kept in code, even if
 // not visible to client code.
 type builderStrategy interface {
-	nilPointer(v reflect.Value)
+	nilPointer(v reflect.Value, visitedTypes []reflect.Type) types
 }
 
 type defaultBuilderStrategy struct{}
 
-func (s defaultBuilderStrategy) nilPointer(v reflect.Value) {
+func (s defaultBuilderStrategy) nilPointer(v reflect.Value) types {
 	type_ := v.Type()
 	panic(fmt.Sprintf("surgeon: nil value: %s", printType(type_)))
 }
 
-type initializePointerStrategy struct {
+type initializePointerStrategy[T any] struct {
+	graph *Graph[T]
 }
 
-func (initializePointerStrategy) nilPointer(v reflect.Value) {
+func (i initializePointerStrategy[T]) nilPointer(v reflect.Value,
+	visitedTypes []reflect.Type,
+) types {
 	type_ := v.Type()
 	fmt.Println("Create ", printType(type_))
 	v.Set(reflect.New(type_.Elem()))
+
+	e := v.Elem()
+	newInitValue := e
+	// if v != initValue {
+	// 	newInitValue = initValue
+	// }
+	tmp := i.graph.buildTypeDependencies(e, i, newInitValue, visitedTypes, true)
+	tmp.append(type_)
+
+	if i, ok := v.Interface().(Initer); ok {
+		i.Init()
+	}
+	return tmp
 }
 
 type types []reflect.Type
@@ -201,7 +217,7 @@ func (a *Graph[T]) buildTypeDependencies(
 		fallthrough
 	case reflect.Pointer:
 		if v.IsZero() {
-			s.nilPointer(v)
+			return s.nilPointer(v, visitedTypes)
 		}
 		e := v.Elem()
 		newInitValue := e
@@ -691,13 +707,13 @@ func (g *Graph[T]) validate(v reflect.Value) []error {
 // Validate checks that the graph is fully initialized.
 //
 // The intended use case is that the graph itself consists of objects that are
-// not modified during the lifetime of the application, so the assumption is
-// that values should not be nil. As such, any nil pointer or interface will
-// result in an invalid graph.
+// not modified during the lifetime of the application. For this reason, it's
+// assumed that values in the graph should not be nil. As such, any nil pointer
+// or interface will result in an invalid graph.
 //
 // There is a reasonable use case for nil values, when part of the graph is used
 // in different executables, e.g., a web server and CLI for the same application
-// may reuse parts of the graph, but
+// may reuse parts of the graph. This scenario has not been explored.
 //
 // Please submit an issue if you have this use case (the solution would be to
 // identify an interface where an object in the graph can tell if it's valid or
