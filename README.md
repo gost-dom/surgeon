@@ -82,7 +82,7 @@ and `RootRouter`. But the initialised routes reference the original routes.
 
 ### Solution - extract initialization to an `Init` function
 
-Surgeon checks for the precense of an interace `Initier`, and calls `Init()` on
+Surgeon checks for the presence of an interface `Initier`, and calls `Init()` on
 all the objects that it clones.
 
 By moving initialization code to an `Init()` function, surgeon can reinitialise
@@ -113,9 +113,9 @@ func (r *RootRouter) Init() {
 }
 ```
 
-And similar for the AuthRouter.
+And similar for the `AuthRouter`.
 
-Surgeon will still only call Init on the few objects in the graph that it
+Surgeon will still only call `Init` on the few objects in the graph that it
 actually clones.
 
 ### Reinitialization will run in the correct order
