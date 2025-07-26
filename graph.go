@@ -68,17 +68,7 @@ func (g *Graph[T]) buildTypeDependencies(
 	visitedTypes []reflect.Type,
 ) types {
 	type_ := v.Type()
-	if !g.inScope(type_) {
-		return nil
-	}
-	if slices.Contains(visitedTypes, type_) {
-		names := make([]string, len(visitedTypes)+1)
-		for i, t := range visitedTypes {
-			names[i] = t.Name()
-		}
-		names[len(visitedTypes)] = type_.Name()
-		panic("surgeon: cyclic dependencies in graph: " + strings.Join(names, ", "))
-	}
+	g.assertNoCyclicDeps(type_, visitedTypes)
 	visitedTypes = append(visitedTypes, type_)
 
 	switch type_.Kind() {
@@ -422,5 +412,16 @@ func (g *Graph[T]) inScopeFields(v reflect.Value) iter.Seq2[reflect.StructField,
 				return
 			}
 		}
+	}
+}
+
+func (g *Graph[T]) assertNoCyclicDeps(t reflect.Type, visited types) {
+	if slices.Contains(visited, t) {
+		names := make([]string, len(visited)+1)
+		for i, t := range visited {
+			names[i] = printType(t)
+		}
+		names[len(visited)] = t.Name()
+		panic("surgeon: cyclic dependencies in graph: " + strings.Join(names, ", "))
 	}
 }
