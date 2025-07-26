@@ -90,7 +90,7 @@ func TestReplaceSingleDependencyOnPointer(t *testing.T) {
 	if !reflect.DeepEqual(actual.SimpleRoot, subTreeCopy) {
 		t.Fatal("Object tree was not equal")
 	}
-	assert.Same(t, simpleRoot, actual.SimpleRoot, "It's pointing somewhere else")
+	assert.Same(t, simpleRoot, actual.SimpleRoot, "Unaffected subgraph is not changed")
 }
 
 func TestReplaceSingleDependencyOnNonPointer(t *testing.T) {
@@ -110,7 +110,7 @@ func TestReplaceSingleDependencyOnNonPointer(t *testing.T) {
 	if !reflect.DeepEqual(actual.SimpleRoot, subTreeCopy) {
 		t.Fatal("Object tree was not equal")
 	}
-	assert.Same(t, simpleRoot, actual.SimpleRoot, "It's pointing somewhere else")
+	assert.Same(t, simpleRoot, actual.SimpleRoot, "Unaffected subgraph is not changed")
 }
 
 func TestPanicWhenDependencyDoesntExist(t *testing.T) {
@@ -492,9 +492,14 @@ func TestPointerValues(t *testing.T) {
 
 	t.Run("Root with multiple pointer values to same type", func(t *testing.T) {
 		var root = &PointerToMultipleIdenticalPointers{}
+		assert.Nil(t, root.First, "First was uninitialized before building")
+		assert.Nil(t, root.Second, "Second was uninitialized after building")
+
 		surgeon.BuildGraph(&root)
+
 		assert.NotNil(t, root.First, "First was assigned")
 		assert.NotNil(t, root.Second, "Second was assigned")
+
 		assert.Same(t, root.First, root.Second, "Two pointers were assigned same value")
 	})
 
