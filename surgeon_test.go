@@ -477,8 +477,8 @@ type PointerToRealARoot struct {
 }
 
 type PointerToMultipleIdenticalPointers struct {
-	First  *RealA
-	Second *RealA
+	First  *RealB
+	Second *RealB
 }
 
 func TestPointerValues(t *testing.T) {

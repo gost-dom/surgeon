@@ -10,6 +10,11 @@ import (
 	"strings"
 )
 
+type graphValue struct {
+	value       reflect.Value
+	initialized bool
+}
+
 // The Graph is the result of analysing a real object graph.
 type Graph[T any] struct {
 	instance T
@@ -27,6 +32,8 @@ type Graph[T any] struct {
 	// scopes define which types should be analysed in the graph. Generally you
 	// want to add your root scope.
 	scopes []Scope
+	// values contains _canonical_ values for each type.
+	values map[reflect.Type]graphValue
 }
 
 func (g *Graph[T]) inScope(t reflect.Type) bool {
@@ -282,6 +289,7 @@ func (g *Graph[T]) clone() *Graph[T] {
 		g.dependencies.clone(),
 		maps.Clone(g.interfaces),
 		g.scopes,
+		maps.Clone(g.values),
 	}
 }
 

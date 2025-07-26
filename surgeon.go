@@ -45,6 +45,7 @@ func BuildGraph[T any](instance T, scopes ...Scope) *Graph[T] {
 		scopes:       scopes,
 		dependencies: newGraphDependencies(),
 		interfaces:   make(map[reflect.Type]struct{}),
+		values:       make(map[reflect.Type]graphValue),
 	}
 
 	v := reflect.ValueOf(result.instance)
@@ -87,20 +88,22 @@ func (i initializePointerStrategy[T]) nilPointer(v reflect.Value,
 	visitedTypes []reflect.Type,
 ) types {
 	type_ := v.Type()
-	fmt.Println("Create ", printType(type_))
-	v.Set(reflect.New(type_.Elem()))
+	if existing, ok := i.graph.values[type_]; ok {
+		v.Set(existing.value)
+		i.graph.values[type_] = graphValue{v, false}
+	} else {
+		v.Set(reflect.New(type_.Elem()))
+	}
 
 	e := v.Elem()
 	newInitValue := e
-	// if v != initValue {
-	// 	newInitValue = initValue
-	// }
 	tmp := i.graph.buildTypeDependencies(e, i, newInitValue, visitedTypes)
 	tmp.append(type_)
 
-	if i, ok := v.Interface().(Initer); ok {
-		i.Init()
+	if init, ok := v.Interface().(Initer); ok && !i.graph.values[type_].initialized {
+		init.Init()
 	}
+	i.graph.values[type_] = graphValue{v, true}
 	return tmp
 }
 
@@ -246,7 +249,6 @@ func Replace[V any, T any](a *Graph[T], instance V) *Graph[T] {
 	}
 
 	allDeps, depGraph := allDepsOfNewInstance(t, instance, a.scopes)
-	// fmt.Println("New deps to inject", allDeps)
 
 	replacedInstance, removedTypes, _ := res.replace(
 		reflect.ValueOf(a.instance), reflect.ValueOf(instance),
