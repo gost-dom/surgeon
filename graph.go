@@ -3,6 +3,7 @@ package surgeon
 import (
 	"errors"
 	"fmt"
+	"iter"
 	"maps"
 	"reflect"
 	"slices"
@@ -102,12 +103,7 @@ func (g *Graph[T]) buildTypeDependencies(
 	case reflect.Struct:
 		var dependencies types
 		typeDependencies := newGraphDependency()
-		for i := range type_.NumField() {
-			f := type_.Field(i)
-			if !f.IsExported() {
-				continue
-			}
-			fieldValue := v.FieldByIndex(f.Index)
+		for f, fieldValue := range g.inScopeFields(v) {
 			initValue := fieldValue
 
 			// If the current field is anonymous and implement the `Initer`
@@ -386,18 +382,7 @@ func (g *Graph[T]) validate(v reflect.Value) []error {
 
 	n := t.NumField()
 	errs := make([]error, 0, n)
-	for i := range n {
-		f := t.Field(i)
-		if !f.IsExported() {
-			continue
-		}
-
-		valid := g.inScope(f.Type)
-		if !valid {
-			continue
-		}
-
-		fv := v.Field(i)
+	for f, fv := range g.inScopeFields(v) {
 		switch f.Type.Kind() {
 		case reflect.Interface, reflect.Pointer:
 			if fv.IsZero() {
@@ -416,4 +401,26 @@ func (g *Graph[T]) validate(v reflect.Value) []error {
 
 	}
 	return errs
+}
+
+// inScopeFields return an iterator to visit all struct fields that are
+// applicable for processing by Surgeon. These fields must be
+//   - Exported
+//   - Have a type that is in scope, if scopes are supplied.
+func (g *Graph[T]) inScopeFields(v reflect.Value) iter.Seq2[reflect.StructField, reflect.Value] {
+	t := v.Type()
+	return func(yield func(reflect.StructField, reflect.Value) bool) {
+		for i := range t.NumField() {
+			f := t.Field(i)
+			if !f.IsExported() {
+				continue
+			}
+			if !g.inScope(f.Type) {
+				continue
+			}
+			if !yield(f, v.Field(i)) {
+				return
+			}
+		}
+	}
 }
